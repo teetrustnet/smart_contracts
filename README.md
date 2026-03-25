@@ -30,7 +30,7 @@ Copy `.env.example` to `.env` and fill in the values you need for the target net
 cp .env.example .env
 ```
 
-Important: `AUCTION_TOKENS_PER_EPOCH` and `AUCTION_MAX_QTY` are raw token units, not "human readable" token counts. If your sale token uses 18 decimals and you want to auction 25,000 whole tokens per epoch, the value must be `25000000000000000000000`.
+Important: this workspace now assumes an 18-decimal sale token. `AUCTION_TOKENS_PER_EPOCH` and `AUCTION_MAX_QTY` in `.env` are entered as normal token amounts such as `25000`, and the deployment script converts them to 18-decimal on-chain units. On-chain bid `quantity` values should also be encoded with `parseUnits(value, 18)`, while `pricePerToken` stays in wei per whole token.
 
 ## Scripts
 
@@ -48,6 +48,7 @@ Important: `AUCTION_TOKENS_PER_EPOCH` and `AUCTION_MAX_QTY` are raw token units,
 - Set `AUCTION_SALE_TOKEN_ADDRESS` to reuse an existing ERC-20 sale token instead of deploying `MockSaleToken`.
 - Set `AUCTION_SEED_AUCTION_WITH_TOKENS=false` if you want to fund the auction inventory manually after deployment.
 - If `AUCTION_TREASURY` is omitted, the deployer address is used as the treasury on remote networks.
+- The auction contract prices bids per whole token and settles collateral as `quantity * pricePerToken / 1e18`.
 
 ## Continuous Integration
 

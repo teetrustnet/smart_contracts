@@ -38,6 +38,17 @@ function readBigInt(name, fallback) {
   }
 }
 
+function readTokenAmount(name, fallback) {
+  const raw = process.env[name];
+  const value = raw === undefined || raw === "" ? fallback : raw;
+
+  try {
+    return ethers.parseUnits(value, 18);
+  } catch {
+    throw new Error(`Invalid 18-decimal token amount for ${name}: ${value}`);
+  }
+}
+
 function readBoolean(name, fallback) {
   const raw = process.env[name];
   if (raw === undefined || raw === "") {
@@ -90,8 +101,8 @@ async function main() {
   const totalEpochs = readNumber("AUCTION_TOTAL_EPOCHS", 10);
   const commitDuration = readNumber("AUCTION_COMMIT_SECONDS", 300);
   const revealDuration = readNumber("AUCTION_REVEAL_SECONDS", 120);
-  const tokensPerEpoch = readBigInt("AUCTION_TOKENS_PER_EPOCH", "25000");
-  const maxQuantityPerBid = readBigInt("AUCTION_MAX_QTY", "25000");
+  const tokensPerEpoch = readTokenAmount("AUCTION_TOKENS_PER_EPOCH", "25000");
+  const maxQuantityPerBid = readTokenAmount("AUCTION_MAX_QTY", "25000");
   const initialFloorPriceWei = ethers.parseEther(process.env.AUCTION_INITIAL_FLOOR_ETH || "0.24");
   const penaltyBps = readNumber("AUCTION_PENALTY_BPS", 500);
   const startDelaySeconds = readNumber("AUCTION_START_DELAY_SECONDS", 120);
@@ -157,7 +168,8 @@ async function main() {
   console.log("Treasury:", treasuryAddress);
   console.log("Auction Start:", auctionStartTime);
   console.log("Inventory Seeded:", seedAuctionWithTokens ? "yes" : "no");
-  console.log("Total Auction Inventory:", totalSupplyForAuction.toString());
+  console.log("Total Auction Inventory:", ethers.formatUnits(totalSupplyForAuction, 18));
+  console.log("Max Quantity Per Bid:", ethers.formatUnits(maxQuantityPerBid, 18));
   console.log("Initial Floor Price (wei):", initialFloorPriceWei.toString());
 
   if (!seedAuctionWithTokens) {

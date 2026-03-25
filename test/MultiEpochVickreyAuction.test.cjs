@@ -3,6 +3,9 @@ const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
 describe("MultiEpochVickreyAuction", function () {
+  const quote = (quantity, pricePerToken) => (quantity * pricePerToken) / unit("1");
+  const unit = (value) => ethers.parseUnits(value, 18);
+
   async function deployFixture() {
     const [owner, treasury, bidderA, bidderB] = await ethers.getSigners();
 
@@ -17,8 +20,8 @@ describe("MultiEpochVickreyAuction", function () {
       totalEpochs: 3,
       commitDuration: 300,
       revealDuration: 120,
-      tokensPerEpoch: 1000n,
-      maxQuantityPerBid: 1000n,
+      tokensPerEpoch: unit("1000"),
+      maxQuantityPerBid: unit("1000"),
       initialFloor: ethers.parseEther("0.10"),
       penaltyBps: 500,
     };
@@ -50,8 +53,8 @@ describe("MultiEpochVickreyAuction", function () {
 
     await time.increaseTo(auctionStart + 1);
 
-    const qtyA = 600n;
-    const qtyB = 500n;
+    const qtyA = unit("600");
+    const qtyB = unit("500");
     const priceA = ethers.parseEther("0.20");
     const priceB = ethers.parseEther("0.15");
     const saltA = ethers.id("salt-A");
@@ -66,8 +69,8 @@ describe("MultiEpochVickreyAuction", function () {
       [1n, bidderB.address, qtyB, priceB, saltB],
     );
 
-    await auction.connect(bidderA).commitBid(1, commitmentA, { value: qtyA * priceA });
-    await auction.connect(bidderB).commitBid(1, commitmentB, { value: qtyB * priceB });
+    await auction.connect(bidderA).commitBid(1, commitmentA, { value: quote(qtyA, priceA) });
+    await auction.connect(bidderB).commitBid(1, commitmentB, { value: quote(qtyB, priceB) });
 
     await time.increaseTo(auctionStart + params.commitDuration + 1);
 
@@ -80,22 +83,22 @@ describe("MultiEpochVickreyAuction", function () {
 
     const summary = await auction.getEpochSummary(1);
     expect(summary[0]).to.equal(priceB);
-    expect(summary[1]).to.equal(1000n);
+    expect(summary[1]).to.equal(unit("1000"));
     expect(summary[2]).to.equal(priceB / 2n);
 
     const bidA = await auction.getUserBid(bidderA.address, 1);
     const bidB = await auction.getUserBid(bidderB.address, 1);
 
-    expect(bidA[4]).to.equal(600n);
-    expect(bidB[4]).to.equal(400n);
+    expect(bidA[4]).to.equal(unit("600"));
+    expect(bidB[4]).to.equal(unit("400"));
     expect(bidA[6]).to.equal(ethers.parseEther("30"));
     expect(bidB[6]).to.equal(ethers.parseEther("15"));
 
     await auction.connect(bidderA).claimTokens([1]);
     await auction.connect(bidderB).claimTokens([1]);
 
-    expect(await token.balanceOf(bidderA.address)).to.equal(600n);
-    expect(await token.balanceOf(bidderB.address)).to.equal(400n);
+    expect(await token.balanceOf(bidderA.address)).to.equal(unit("600"));
+    expect(await token.balanceOf(bidderB.address)).to.equal(unit("400"));
 
     await auction.connect(bidderA).withdrawRefund(1);
     await auction.connect(bidderB).withdrawRefund(1);
@@ -112,9 +115,9 @@ describe("MultiEpochVickreyAuction", function () {
 
     await time.increaseTo(auctionStart + 1);
 
-    const qty = 80n;
+    const qty = unit("80");
     const price = ethers.parseEther("0.12");
-    const collateral = qty * price;
+    const collateral = quote(qty, price);
     const salt = ethers.id("salt-missed");
 
     const commitment = ethers.solidityPackedKeccak256(

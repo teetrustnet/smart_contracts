@@ -8,6 +8,8 @@ interface IERC20 {
 }
 
 contract MultiEpochVickreyAuction {
+    uint256 public constant TOKEN_SCALE = 1e18;
+
     error NotOwner();
     error ContractPaused();
     error InvalidAddress();
@@ -377,7 +379,7 @@ contract MultiEpochVickreyAuction {
         bytes32 digest = keccak256(abi.encodePacked(epochId, msg.sender, quantity, pricePerToken, salt));
         if (digest != bid.commitment) revert InvalidReveal();
 
-        uint256 requiredCollateral = quantity * pricePerToken;
+        uint256 requiredCollateral = _quotePayment(quantity, pricePerToken);
         if (requiredCollateral > bid.collateral) {
             revert InsufficientCollateral(requiredCollateral, bid.collateral);
         }
@@ -456,7 +458,7 @@ contract MultiEpochVickreyAuction {
 
             if (bid.revealed) {
                 if (bid.winner && bid.allocatedQuantity > 0) {
-                    uint256 payment = bid.allocatedQuantity * clearingPrice;
+                    uint256 payment = _quotePayment(bid.allocatedQuantity, clearingPrice);
                     bid.paymentDue = payment;
                     bid.refundDue = bid.collateral - payment;
                     epochRevenue += payment;
@@ -626,5 +628,13 @@ contract MultiEpochVickreyAuction {
 
             ranked[j] = candidate;
         }
+    }
+
+    function _quotePayment(uint256 quantity, uint256 pricePerToken)
+        internal
+        pure
+        returns (uint256)
+    {
+        return (quantity * pricePerToken) / TOKEN_SCALE;
     }
 }
