@@ -4,12 +4,17 @@
   "version": "0.1.0",
   "description": "Standalone Hardhat workspace for TrustNet smart contracts.",
   "scripts": {
+    "clean": "node -e \"const fs=require('fs'); ['artifacts-hardhat','cache-hardhat'].forEach((dir)=>fs.rmSync(dir,{ recursive:true, force:true }));\"",
     "compile": "node ./node_modules/hardhat/internal/cli/bootstrap.js compile --config hardhat.config.cjs",
     "test": "node ./node_modules/hardhat/internal/cli/bootstrap.js test --config hardhat.config.cjs",
-    "deploy:local": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network hardhat --config hardhat.config.cjs"
+    "deploy:local": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network hardhat --config hardhat.config.cjs",
+    "deploy:testnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network bscTestnet --config hardhat.config.cjs",
+    "deploy:mainnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network bsc --config hardhat.config.cjs",
+    "smoke:local": "npm run compile && npm run test && npm run deploy:local"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.2",
+    "dotenv": "^17.2.3",
     "hardhat": "^2.28.6"
   }
 }
