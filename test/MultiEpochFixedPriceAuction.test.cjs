@@ -22,6 +22,7 @@ describe("MultiEpochFixedPriceAuction", function () {
       tokensPerEpoch: unit("1000"),
       maxQty: unit("1000"),
       initialPrice: ethers.parseEther("0.10"),
+      reservePrice: ethers.parseEther("0.04"),
       priceDecayBps: 0,
     };
 
@@ -35,6 +36,7 @@ describe("MultiEpochFixedPriceAuction", function () {
       params.tokensPerEpoch,
       params.maxQty,
       params.initialPrice,
+      params.reservePrice,
       params.priceDecayBps,
     );
     await auction.waitForDeployment();
@@ -132,5 +134,49 @@ describe("MultiEpochFixedPriceAuction", function () {
     await expect(
       auction.connect(bidderA).placeOrder(1, qty, 200, { value: payment + tip }),
     ).to.be.revertedWithCustomError(auction, "ListingNotActive");
+  });
+
+  it("uses geometric decay curve with reserve floor", async function () {
+    const [owner, treasury] = await ethers.getSigners();
+
+    const MockSaleToken = await ethers.getContractFactory("MockSaleToken");
+    const token = await MockSaleToken.deploy();
+    await token.waitForDeployment();
+
+    const latest = await ethers.provider.getBlock("latest");
+    const auctionStart = latest.timestamp + 60;
+
+    const Auction = await ethers.getContractFactory("MultiEpochFixedPriceAuction");
+    const auction = await Auction.deploy(
+      await token.getAddress(),
+      treasury.address,
+      auctionStart,
+      8,
+      120,
+      unit("100"),
+      unit("100"),
+      ethers.parseEther("1"), // initial
+      ethers.parseEther("0.25"), // reserve floor
+      2000, // 20% geometric decay per epoch
+    );
+    await auction.waitForDeployment();
+
+    expect(await auction.epochPriceFor(1)).to.equal(ethers.parseEther("1"));
+    expect(await auction.epochPriceFor(2)).to.equal(ethers.parseEther("0.8"));
+    expect(await auction.epochPriceFor(3)).to.equal(ethers.parseEther("0.64"));
+
+    // by later epochs, price should not go below reserve floor
+    const p7 = await auction.epochPriceFor(7);
+    expect(p7).to.equal(ethers.parseEther("0.262144"));
+
+    const p8 = await auction.epochPriceFor(8);
+    expect(p8).to.equal(ethers.parseEther("0.25"));
+
+    const batch = await auction.getEpochPriceBatch(1, 4);
+    expect(batch.length).to.equal(4);
+    expect(batch[0]).to.equal(ethers.parseEther("1"));
+    expect(batch[1]).to.equal(ethers.parseEther("0.8"));
+    expect(batch[2]).to.equal(ethers.parseEther("0.64"));
+    expect(batch[3]).to.equal(ethers.parseEther("0.512"));
   });
 });

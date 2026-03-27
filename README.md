@@ -9,6 +9,7 @@ Standalone Hardhat workspace for the TrustNet auction contracts.
 - `scripts/`
 - `docs/`
   - `docs/AUCTION_BUSINESS_LOGIC_V2.md` (business logic spec before contract implementation)
+  - `docs/FIXED_PRICE_CURVE.md` (geometric decay + reserve floor pricing notes)
 - `hardhat.config.cjs`
 - `.github/workflows/ci.yml`
 - `.env.example`
@@ -39,9 +40,12 @@ Important: this workspace now assumes an 18-decimal sale token. `AUCTION_TOKENS_
 - `npm run compile`: compile contracts
 - `npm run test`: run the contract test suite
 - `npm run smoke:local`: compile, test, and do a local deployment
-- `npm run deploy:local`: deploy to Hardhat's local in-process network
-- `npm run deploy:testnet`: deploy to `bscTestnet` using `.env`
-- `npm run deploy:mainnet`: deploy to `bsc` using `.env`
+- `npm run deploy:local`: deploy commit-reveal auction to Hardhat's local in-process network
+- `npm run deploy:testnet`: deploy commit-reveal auction to `bscTestnet` using `.env`
+- `npm run deploy:mainnet`: deploy commit-reveal auction to `bsc` using `.env`
+- `npm run deploy:fixed:local`: deploy fixed-price auction to Hardhat local
+- `npm run deploy:fixed:testnet`: deploy fixed-price auction to `bscTestnet`
+- `npm run deploy:fixed:mainnet`: deploy fixed-price auction to `bsc`
 
 ## Deployment Notes
 
@@ -50,7 +54,8 @@ Important: this workspace now assumes an 18-decimal sale token. `AUCTION_TOKENS_
 - Set `AUCTION_SALE_TOKEN_ADDRESS` to reuse an existing ERC-20 sale token instead of deploying `MockSaleToken`.
 - Set `AUCTION_SEED_AUCTION_WITH_TOKENS=false` if you want to fund the auction inventory manually after deployment.
 - If `AUCTION_TREASURY` is omitted, the deployer address is used as the treasury on remote networks.
-- The auction contract prices bids per whole token and settles collateral as `quantity * pricePerToken / 1e18`.
+- The commit-reveal auction prices bids per whole token and settles collateral as `quantity * pricePerToken / 1e18`.
+- The fixed-price auction uses geometric decay + reserve floor and supports optional listing bootstrap (`FIXED_BOOTSTRAP_LISTING=true`).
 
 ## Continuous Integration
 

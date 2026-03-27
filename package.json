@@ -10,6 +10,9 @@
     "deploy:local": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network hardhat --config hardhat.config.cjs",
     "deploy:testnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network bscTestnet --config hardhat.config.cjs",
     "deploy:mainnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network bsc --config hardhat.config.cjs",
+    "deploy:fixed:local": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-fixed-auction.cjs --network hardhat --config hardhat.config.cjs",
+    "deploy:fixed:testnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-fixed-auction.cjs --network bscTestnet --config hardhat.config.cjs",
+    "deploy:fixed:mainnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-fixed-auction.cjs --network bsc --config hardhat.config.cjs",
     "smoke:local": "npm run compile && npm run test && npm run deploy:local"
   },
   "devDependencies": {

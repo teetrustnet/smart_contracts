@@ -18,6 +18,7 @@ contract MultiEpochFixedPriceAuction {
     error InvalidAddress();
     error InvalidConfig();
     error InvalidEpoch();
+    error InvalidRange();
     error ListingNotActive();
     error AttestationNotVerified();
     error EpochNotOpen();
@@ -84,6 +85,7 @@ contract MultiEpochFixedPriceAuction {
     uint256 public immutable tokensPerEpoch;
     uint256 public immutable maxQuantityPerOrder;
     uint256 public immutable initialPricePerToken;
+    uint256 public immutable reservePricePerToken;
     uint16 public immutable priceDecayBps;
 
     bool public paused;
@@ -161,6 +163,7 @@ contract MultiEpochFixedPriceAuction {
         uint256 tokensPerEpoch_,
         uint256 maxQuantityPerOrder_,
         uint256 initialPricePerToken_,
+        uint256 reservePricePerToken_,
         uint16 priceDecayBps_
     ) {
         if (saleToken_ == address(0) || treasury_ == address(0)) revert InvalidAddress();
@@ -170,6 +173,8 @@ contract MultiEpochFixedPriceAuction {
             tokensPerEpoch_ == 0 ||
             maxQuantityPerOrder_ == 0 ||
             initialPricePerToken_ == 0 ||
+            reservePricePerToken_ == 0 ||
+            reservePricePerToken_ > initialPricePerToken_ ||
             priceDecayBps_ > BPS
         ) {
             revert InvalidConfig();
@@ -188,6 +193,7 @@ contract MultiEpochFixedPriceAuction {
         tokensPerEpoch = tokensPerEpoch_;
         maxQuantityPerOrder = maxQuantityPerOrder_;
         initialPricePerToken = initialPricePerToken_;
+        reservePricePerToken = reservePricePerToken_;
         priceDecayBps = priceDecayBps_;
     }
 
@@ -299,6 +305,8 @@ contract MultiEpochFixedPriceAuction {
         return block.timestamp >= startTime && block.timestamp < endTime;
     }
 
+    /// @notice Geometric decay with reserve floor.
+    /// price(epoch) = max(reservePrice, initialPrice * ((BPS - decay)/BPS)^(epoch-1))
     function epochPriceFor(uint256 epochId) public view returns (uint256) {
         if (epochId == 0 || epochId > totalEpochs) revert InvalidEpoch();
 
@@ -307,17 +315,24 @@ contract MultiEpochFixedPriceAuction {
             return overridePrice;
         }
 
-        if (epochId == 1) {
+        if (epochId == 1 || priceDecayBps == 0) {
             return initialPricePerToken;
         }
 
-        uint256 discount = uint256(priceDecayBps) * (epochId - 1);
-        if (discount >= BPS) {
-            return 1;
+        uint256 decayFactorBps = BPS - uint256(priceDecayBps);
+        if (decayFactorBps == 0) {
+            return reservePricePerToken;
         }
 
-        uint256 price = (initialPricePerToken * (BPS - discount)) / BPS;
-        return price == 0 ? 1 : price;
+        uint256 price = initialPricePerToken;
+        for (uint256 i = 1; i < epochId; i++) {
+            price = (price * decayFactorBps) / BPS;
+            if (price <= reservePricePerToken) {
+                return reservePricePerToken;
+            }
+        }
+
+        return price;
     }
 
     function placeOrder(uint256 epochId, uint256 quantity, uint16 tipBps)
@@ -508,6 +523,23 @@ contract MultiEpochFixedPriceAuction {
     function getEpochParticipants(uint256 epochId) external view returns (address[] memory) {
         if (epochId == 0 || epochId > totalEpochs) revert InvalidEpoch();
         return _epochParticipants[epochId];
+    }
+
+    function getEpochPriceBatch(uint256 fromEpoch, uint256 toEpoch)
+        external
+        view
+        returns (uint256[] memory prices)
+    {
+        if (fromEpoch == 0 || toEpoch == 0 || fromEpoch > toEpoch || toEpoch > totalEpochs) {
+            revert InvalidRange();
+        }
+
+        uint256 length = toEpoch - fromEpoch + 1;
+        prices = new uint256[](length);
+
+        for (uint256 i = 0; i < length; i++) {
+            prices[i] = epochPriceFor(fromEpoch + i);
+        }
     }
 
     function _rankByTip(uint256 epochId) internal view returns (address[] memory ranked) {

@@ -29,9 +29,13 @@
 ## Fixed-Price v2 Model (Launchpad-oriented)
 
 - No `revealBid` step (each epoch has fixed token price).
+- Price curve uses **geometric decay + reserve floor**:
+  - `price(epoch) = max(reservePrice, initialPrice * ((1 - decay) ^ (epoch - 1)))`
+- Owner can set per-epoch price override before that epoch starts.
+- `getEpochPriceBatch(from,to)` is provided for frontend curve rendering.
 - Order input: `quantity + tipBps` with exact ETH collateral check.
 - Oversubscription allocation priority: higher `tipBps`, then higher absolute tip amount.
-- Partial fill and pro-rata refund are supported.
+- Partial fill and refund are supported.
 - Listing must be `active` and `attestationVerified` before orders are accepted.
 - Claim and refund remain separated: `claimTokens()` and `withdrawRefund()`.
 
