@@ -7,6 +7,8 @@ Standalone Hardhat workspace for the TrustNet auction contracts.
 - `contracts/`
 - `test/`
 - `scripts/`
+- `docs/`
+  - `docs/AUCTION_BUSINESS_LOGIC_V2.md` (business logic spec before contract implementation)
 - `hardhat.config.cjs`
 - `.github/workflows/ci.yml`
 - `.env.example`
