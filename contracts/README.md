@@ -38,6 +38,9 @@
 - Partial fill and refund are supported.
 - Listing must be `active` and `attestationVerified` before orders are accepted.
 - Claim and refund remain separated: `claimTokens()` and `withdrawRefund()`.
+- Canonical WAIFU tokenomics metadata is exposed on-chain via:
+  - `tokenomicsPlan()`
+  - `tokenomicsTotalBps()`
 
 ## Notes
 

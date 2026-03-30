@@ -35,6 +35,17 @@ contract MultiEpochVickreyAuction {
     error TokensAlreadyClaimed();
     error TransferFailed();
 
+    /// @notice Human-readable tokenomics bucket used for frontend sync and audits.
+    /// @dev `tgeReleaseBps` is release-at-TGE percentage within each bucket.
+    struct TokenomicsBucket {
+        string name;
+        uint16 allocationBps;
+        uint16 tgeReleaseBps;
+        uint16 cliffMonths;
+        uint16 linearVestingMonths;
+        bool milestoneBased;
+    }
+
     struct Bid {
         bytes32 commitment;
         uint256 collateral;
@@ -174,6 +185,79 @@ contract MultiEpochVickreyAuction {
     }
 
     receive() external payable {}
+
+    /// @notice Returns the canonical WAIFU tokenomics plan (100% total allocation).
+    function tokenomicsPlan() external pure returns (TokenomicsBucket[] memory buckets) {
+        buckets = new TokenomicsBucket[](7);
+
+        buckets[0] = TokenomicsBucket({
+            name: "Blind Auction",
+            allocationBps: 500,
+            tgeReleaseBps: 10_000,
+            cliffMonths: 0,
+            linearVestingMonths: 0,
+            milestoneBased: false
+        });
+
+        buckets[1] = TokenomicsBucket({
+            name: "Core Contributors",
+            allocationBps: 1_500,
+            tgeReleaseBps: 0,
+            cliffMonths: 12,
+            linearVestingMonths: 48,
+            milestoneBased: false
+        });
+
+        buckets[2] = TokenomicsBucket({
+            name: "Technology Development",
+            allocationBps: 2_000,
+            tgeReleaseBps: 0,
+            cliffMonths: 0,
+            linearVestingMonths: 0,
+            milestoneBased: true
+        });
+
+        buckets[3] = TokenomicsBucket({
+            name: "Ecosystem & Community",
+            allocationBps: 2_000,
+            tgeReleaseBps: 0,
+            cliffMonths: 0,
+            linearVestingMonths: 0,
+            milestoneBased: false
+        });
+
+        buckets[4] = TokenomicsBucket({
+            name: "Liquidity & Market Making",
+            allocationBps: 1_000,
+            tgeReleaseBps: 5_000,
+            cliffMonths: 0,
+            linearVestingMonths: 6,
+            milestoneBased: false
+        });
+
+        buckets[5] = TokenomicsBucket({
+            name: "Marketing & Growth",
+            allocationBps: 500,
+            tgeReleaseBps: 10_000,
+            cliffMonths: 0,
+            linearVestingMonths: 0,
+            milestoneBased: false
+        });
+
+        buckets[6] = TokenomicsBucket({
+            name: "Foundation Reserve",
+            allocationBps: 2_500,
+            tgeReleaseBps: 0,
+            cliffMonths: 24,
+            linearVestingMonths: 48,
+            milestoneBased: false
+        });
+    }
+
+    /// @notice 10000 = 100% allocation in basis points.
+    function tokenomicsTotalBps() external pure returns (uint16) {
+        return 10_000;
+    }
 
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert InvalidAddress();
