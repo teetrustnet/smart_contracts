@@ -94,8 +94,10 @@ async function main() {
   const maxQuantityPerOrder = readTokenAmount("FIXED_MAX_QTY", "25000");
 
   const initialPriceWei = readEthPriceWei("FIXED_INITIAL_PRICE_ETH", "0.24");
-  const reservePriceWei = readEthPriceWei("FIXED_RESERVE_PRICE_ETH", "0.06");
-  const priceDecayBps = readNumber("FIXED_PRICE_DECAY_BPS", 200);
+  // Default reserve is 45% of the default initial price (0.24 * 45% = 0.108).
+  const reservePriceWei = readEthPriceWei("FIXED_RESERVE_PRICE_ETH", "0.108");
+  // Default geometric decay is 2.5% per epoch.
+  const priceDecayBps = readNumber("FIXED_PRICE_DECAY_BPS", 250);
 
   const startDelaySeconds = readNumber("FIXED_START_DELAY_SECONDS", 120);
   const auctionStartTime = readNumber("FIXED_START_TIME", now + startDelaySeconds);
