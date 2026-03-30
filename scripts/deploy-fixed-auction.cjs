@@ -88,8 +88,8 @@ async function main() {
 
   const now = (await ethers.provider.getBlock("latest")).timestamp;
 
-  const totalEpochs = readNumber("FIXED_TOTAL_EPOCHS", 30);
-  const epochDuration = readNumber("FIXED_EPOCH_SECONDS", 120);
+  const totalEpochs = readNumber("FIXED_TOTAL_EPOCHS", 20);
+  const epochDuration = readNumber("FIXED_EPOCH_SECONDS", 180);
   const tokensPerEpoch = readTokenAmount("FIXED_TOKENS_PER_EPOCH", "25000");
   const maxQuantityPerOrder = readTokenAmount("FIXED_MAX_QTY", "25000");
 

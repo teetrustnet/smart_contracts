@@ -98,9 +98,9 @@ async function main() {
 
   const now = (await ethers.provider.getBlock("latest")).timestamp;
 
-  const totalEpochs = readNumber("AUCTION_TOTAL_EPOCHS", 10);
-  const commitDuration = readNumber("AUCTION_COMMIT_SECONDS", 300);
-  const revealDuration = readNumber("AUCTION_REVEAL_SECONDS", 120);
+  const totalEpochs = readNumber("AUCTION_TOTAL_EPOCHS", 20);
+  const commitDuration = readNumber("AUCTION_COMMIT_SECONDS", 120);
+  const revealDuration = readNumber("AUCTION_REVEAL_SECONDS", 60);
   const tokensPerEpoch = readTokenAmount("AUCTION_TOKENS_PER_EPOCH", "25000");
   const maxQuantityPerBid = readTokenAmount("AUCTION_MAX_QTY", "25000");
   const initialFloorPriceWei = ethers.parseEther(process.env.AUCTION_INITIAL_FLOOR_ETH || "0.24");
