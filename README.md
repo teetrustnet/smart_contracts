@@ -10,6 +10,7 @@ Standalone Hardhat workspace for the TrustNet auction contracts.
 - `docs/`
   - `docs/AUCTION_BUSINESS_LOGIC_V2.md` (business logic spec before contract implementation)
   - `docs/FIXED_PRICE_CURVE.md` (geometric decay + reserve floor pricing notes)
+  - `docs/AUCTION_APPLICATION_MVP.md` (application workflow + epoch model for frontend MVP)
 - `hardhat.config.cjs`
 - `.github/workflows/ci.yml`
 - `.env.example`
@@ -33,7 +34,10 @@ Copy `.env.example` to `.env` and fill in the values you need for the target net
 cp .env.example .env
 ```
 
-Important: this workspace now assumes an 18-decimal sale token. `AUCTION_TOKENS_PER_EPOCH` and `AUCTION_MAX_QTY` in `.env` are entered as normal token amounts such as `25000`, and the deployment script converts them to 18-decimal on-chain units. On-chain bid `quantity` values should also be encoded with `parseUnits(value, 18)`, while `pricePerToken` stays in wei per whole token.
+Important: this workspace now assumes an 18-decimal sale token.
+
+- For `MultiEpochVickreyAuction` and `MultiEpochFixedPriceAuction`, deployment env values like `AUCTION_TOKENS_PER_EPOCH` / `AUCTION_MAX_QTY` are entered as normal token amounts (e.g. `25000`) and converted to 18-decimal on-chain units. Bid `quantity` should be encoded with `parseUnits(value, 18)`.
+- For `MultiEpochAuctionApplicationMVP`, `MVP_*` supply and quantity env values are interpreted as **whole-token counts** (e.g. `25000` means 25,000 tokens). The contract internally converts claimed transfer amounts to 18-decimal token units.
 
 ## Scripts
 
@@ -46,6 +50,9 @@ Important: this workspace now assumes an 18-decimal sale token. `AUCTION_TOKENS_
 - `npm run deploy:fixed:local`: deploy fixed-price auction to Hardhat local
 - `npm run deploy:fixed:testnet`: deploy fixed-price auction to `bscTestnet`
 - `npm run deploy:fixed:mainnet`: deploy fixed-price auction to `bsc`
+- `npm run deploy:mvp:local`: deploy and bootstrap `MultiEpochAuctionApplicationMVP` on Hardhat local
+- `npm run deploy:mvp:testnet`: deploy and bootstrap MVP contract on `bscTestnet`
+- `npm run deploy:mvp:mainnet`: deploy and bootstrap MVP contract on `bsc`
 
 ## Deployment Notes
 
@@ -54,8 +61,9 @@ Important: this workspace now assumes an 18-decimal sale token. `AUCTION_TOKENS_
 - Set `AUCTION_SALE_TOKEN_ADDRESS` to reuse an existing ERC-20 sale token instead of deploying `MockSaleToken`.
 - Set `AUCTION_SEED_AUCTION_WITH_TOKENS=false` if you want to fund the auction inventory manually after deployment.
 - If `AUCTION_TREASURY` is omitted, the deployer address is used as the treasury on remote networks.
-- The commit-reveal auction prices bids per whole token and settles collateral as `quantity * pricePerToken / 1e18`.
+- The commit-reveal auction (`MultiEpochVickreyAuction`) prices bids per whole token and settles collateral as `quantity * pricePerToken / 1e18` (quantity in 18-decimal token units).
 - The fixed-price auction uses geometric decay + reserve floor and supports optional listing bootstrap (`FIXED_BOOTSTRAP_LISTING=true`).
+- The application MVP contract (`MultiEpochAuctionApplicationMVP`) treats `quantity` as **whole-token count** (frontend-friendly). Collateral is `quantity * pricePerTokenWei`, and claimed token transfer amount is `quantity * 1e18` token units.
 
 ## Continuous Integration
 
