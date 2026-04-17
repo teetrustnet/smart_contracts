@@ -7,12 +7,13 @@ interface IERC20Like {
 
 contract MultiEpochAuctionApplicationMVP {
     uint256 public constant BPS = 10_000;
-    uint256 public constant TOKEN_DECIMALS_SCALE = 1e18;
+    uint256 public constant DEFAULT_TOKEN_SCALE = 1e18;
 
     uint256 public constant DEFAULT_TOTAL_EPOCHS = 20;
     uint256 public constant DEFAULT_EPOCH_DURATION = 180;
     uint256 public constant DEFAULT_COMMIT_DURATION = 120;
     uint256 public constant DEFAULT_REVEAL_DURATION = 60;
+    uint256 public constant DEFAULT_FINALIZE_BATCH = 200;
 
     error Unauthorized();
     error ContractPaused();
@@ -97,22 +98,48 @@ contract MultiEpochAuctionApplicationMVP {
     }
 
     IERC20Like public immutable saleToken;
+    uint256 public immutable tokenUnitScale;
+
     address public owner;
     address public treasury;
     bool public paused;
 
     uint256 public nextApplicationId = 1;
     uint256 public activeApplicationId;
+
     uint256 public treasuryAccrued;
+    uint256 public totalRefundLiability;
 
     mapping(uint256 => AuctionApplication) private applications;
     mapping(uint256 => mapping(uint256 => EpochConfig)) private epochConfigs;
     mapping(uint256 => mapping(uint256 => EpochRuntime)) private epochRuntime;
+
     mapping(uint256 => mapping(uint256 => mapping(address => Bid))) private bids;
     mapping(uint256 => mapping(uint256 => address[])) private epochParticipants;
     mapping(uint256 => mapping(uint256 => mapping(address => bool))) private isEpochParticipant;
 
+    mapping(uint256 => mapping(uint256 => uint256)) private finalizeCursor;
+    mapping(uint256 => uint256) public recoveredUnsoldWholeTokens;
+
     uint256 private lockState = 1;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event PauseStateChanged(bool paused);
+    event TreasuryUpdated(address indexed previousTreasury, address indexed newTreasury);
+
+    event AuctionApplicationCreated(uint256 indexed applicationId, address indexed applicant, string metadataURI);
+    event AuctionApplicationStatusChanged(uint256 indexed applicationId, ApplicationStatus status);
+    event AuctionApplicationRejected(uint256 indexed applicationId, string reason);
+
+    event BidCommitted(uint256 indexed applicationId, uint256 indexed epochId, address indexed bidder, bool legacyCommitOnly);
+    event BidRevealed(uint256 indexed applicationId, uint256 indexed epochId, address indexed bidder, uint256 allocatedQuantity, uint256 paymentDue);
+    event EpochFinalizedProgress(uint256 indexed applicationId, uint256 indexed epochId, uint256 processedCount, uint256 totalCount, bool finalized);
+
+    event TokensClaimed(address indexed bidder, uint256 indexed applicationId, uint256 tokenUnits);
+    event RefundWithdrawn(address indexed bidder, uint256 indexed applicationId, uint256 indexed epochId, uint256 amountWei);
+    event TreasuryWithdrawn(address indexed to, uint256 amountWei);
+    event UnsoldTokensRecovered(uint256 indexed applicationId, address indexed to, uint256 tokenUnits);
+    event ExcessEthRescued(address indexed to, uint256 amountWei);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
@@ -133,29 +160,40 @@ contract MultiEpochAuctionApplicationMVP {
 
     constructor(address saleToken_, address treasury_) {
         if (saleToken_ == address(0) || treasury_ == address(0)) revert InvalidAddress();
+
         saleToken = IERC20Like(saleToken_);
+        tokenUnitScale = _detectTokenUnitScale(saleToken_);
+
         owner = msg.sender;
         treasury = treasury_;
+
+        emit OwnershipTransferred(address(0), msg.sender);
     }
 
     receive() external payable {}
 
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert InvalidAddress();
+        address previous = owner;
         owner = newOwner;
+        emit OwnershipTransferred(previous, newOwner);
     }
 
     function setTreasury(address newTreasury) external onlyOwner {
         if (newTreasury == address(0)) revert InvalidAddress();
+        address previous = treasury;
         treasury = newTreasury;
+        emit TreasuryUpdated(previous, newTreasury);
     }
 
     function pause() external onlyOwner {
         paused = true;
+        emit PauseStateChanged(true);
     }
 
     function unpause() external onlyOwner {
         paused = false;
+        emit PauseStateChanged(false);
     }
 
     function createAuctionApplication(
@@ -196,32 +234,42 @@ contract MultiEpochAuctionApplicationMVP {
             maxQuantityPerBid: maxQuantityPerBid_
         });
 
+        emit AuctionApplicationCreated(applicationId, applicant, metadataURI);
     }
 
     function submitAuctionApplication(uint256 applicationId) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         if (app.status != ApplicationStatus.Draft) revert InvalidStatus();
+
         app.status = ApplicationStatus.Submitted;
+        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function approveAuctionApplication(uint256 applicationId) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         if (app.status != ApplicationStatus.Submitted) revert InvalidStatus();
         if (!_isApplicationEpochConfigured(applicationId)) revert InvalidConfig();
+
         app.status = ApplicationStatus.Approved;
+        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function rejectAuctionApplication(uint256 applicationId, string calldata reason) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         if (app.status != ApplicationStatus.Submitted && app.status != ApplicationStatus.Approved) revert InvalidStatus();
+
         app.status = ApplicationStatus.Rejected;
         app.rejectReason = reason;
+
+        emit AuctionApplicationRejected(applicationId, reason);
+        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function launchAuctionApplication(uint256 applicationId, uint256 startTime) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         if (app.status != ApplicationStatus.Approved) revert InvalidStatus();
         if (!_isApplicationEpochConfigured(applicationId)) revert InvalidConfig();
+        if (startTime < block.timestamp) revert InvalidConfig();
 
         if (activeApplicationId != 0 && applications[activeApplicationId].status == ApplicationStatus.Live) {
             revert InvalidStatus();
@@ -230,13 +278,20 @@ contract MultiEpochAuctionApplicationMVP {
         app.status = ApplicationStatus.Live;
         app.startTime = startTime;
         activeApplicationId = applicationId;
+
+        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function closeAuctionApplication(uint256 applicationId) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         if (app.status != ApplicationStatus.Live) revert InvalidStatus();
+
         app.status = ApplicationStatus.Closed;
-        if (activeApplicationId == applicationId) activeApplicationId = 0;
+        if (activeApplicationId == applicationId) {
+            activeApplicationId = 0;
+        }
+
+        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function getApplication(uint256 applicationId) external view returns (AuctionApplication memory) {
@@ -250,20 +305,20 @@ contract MultiEpochAuctionApplicationMVP {
     function setEpochConfig(uint256 applicationId, uint256 epochId, uint256 pricePerTokenWei, uint256 supplyTokens) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         _requireConfigurableStatus(app.status);
-        if (epochId == 0 || epochId > app.totalEpochs || pricePerTokenWei == 0 || supplyTokens == 0) revert InvalidConfig();
 
+        if (epochId == 0 || epochId > app.totalEpochs || pricePerTokenWei == 0 || supplyTokens == 0) revert InvalidConfig();
         epochConfigs[applicationId][epochId] = EpochConfig(pricePerTokenWei, supplyTokens);
     }
 
     function setEpochConfigs(uint256 applicationId, uint256[] calldata pricesPerTokenWei, uint256[] calldata supplyTokens) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         _requireConfigurableStatus(app.status);
+
         if (pricesPerTokenWei.length != app.totalEpochs || supplyTokens.length != app.totalEpochs) revert InvalidConfig();
 
         for (uint256 i = 0; i < app.totalEpochs; i++) {
             if (pricesPerTokenWei[i] == 0 || supplyTokens[i] == 0) revert InvalidConfig();
-            uint256 epochId = i + 1;
-            epochConfigs[applicationId][epochId] = EpochConfig(pricesPerTokenWei[i], supplyTokens[i]);
+            epochConfigs[applicationId][i + 1] = EpochConfig(pricesPerTokenWei[i], supplyTokens[i]);
         }
     }
 
@@ -276,6 +331,7 @@ contract MultiEpochAuctionApplicationMVP {
     ) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         _requireConfigurableStatus(app.status);
+
         if (
             firstEpochPriceWei == 0 ||
             totalSupplyTokens == 0 ||
@@ -303,6 +359,7 @@ contract MultiEpochAuctionApplicationMVP {
         for (uint256 i = 1; i <= n; i++) {
             uint256 price = firstEpochPriceWei - ((firstEpochPriceWei - lastEpochPriceWei) * (i - 1)) / (n - 1);
             uint256 supply;
+
             if (i == n) {
                 supply = lastSupply;
             } else {
@@ -315,15 +372,14 @@ contract MultiEpochAuctionApplicationMVP {
         }
 
         if (assigned < frontSupply) {
-            EpochConfig storage cfg = epochConfigs[applicationId][1];
-            cfg.supplyTokens += (frontSupply - assigned);
+            epochConfigs[applicationId][1].supplyTokens += (frontSupply - assigned);
         }
-
     }
 
     function epochConfigFor(uint256 applicationId, uint256 epochId) external view returns (EpochConfig memory) {
         AuctionApplication storage app = _application(applicationId);
         if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+
         return epochConfigs[applicationId][epochId];
     }
 
@@ -359,40 +415,42 @@ contract MultiEpochAuctionApplicationMVP {
 
     function currentEpoch() public view returns (uint256) {
         if (activeApplicationId == 0) return 1;
+
         AuctionApplication storage app = applications[activeApplicationId];
         if (app.startTime == 0 || block.timestamp < app.startTime) return 1;
 
         uint256 elapsed = block.timestamp - app.startTime;
-        uint256 epochId = elapsed / app.epochDuration + 1;
+        uint256 epochId = (elapsed / app.epochDuration) + 1;
         return epochId > app.totalEpochs ? app.totalEpochs : epochId;
     }
 
     function getEpochWindows(uint256 epochId) public view returns (uint256 startTime, uint256 commitEnd, uint256 revealEnd) {
         uint256 appId = _liveApplicationId();
-        AuctionApplication storage app = applications[appId];
-        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
-
-        startTime = app.startTime + (epochId - 1) * app.epochDuration;
-        commitEnd = startTime + app.commitDuration;
-        revealEnd = commitEnd + app.revealDuration;
+        return _epochWindows(applications[appId], epochId);
     }
 
     function getEpochPhase(uint256 epochId) public view returns (Phase) {
         uint256 appId = _liveApplicationId();
-        AuctionApplication storage app = applications[appId];
-        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
-        if (app.status != ApplicationStatus.Live) return Phase.Closed;
+        return _epochPhase(applications[appId], epochId);
+    }
 
-        (uint256 startTime, uint256 commitEnd, uint256 revealEnd) = getEpochWindows(epochId);
-        if (block.timestamp < startTime) return Phase.Closed;
-        if (block.timestamp < commitEnd) return Phase.Commit;
-        if (block.timestamp < revealEnd) return Phase.Reveal;
-        return Phase.Closed;
+    function getEpochWindowsFor(uint256 applicationId, uint256 epochId)
+        external
+        view
+        returns (uint256 startTime, uint256 commitEnd, uint256 revealEnd)
+    {
+        AuctionApplication storage app = _application(applicationId);
+        return _epochWindows(app, epochId);
+    }
+
+    function getEpochPhaseFor(uint256 applicationId, uint256 epochId) external view returns (Phase) {
+        AuctionApplication storage app = _application(applicationId);
+        return _epochPhase(app, epochId);
     }
 
     function currentPhase() external view returns (Phase) {
         if (activeApplicationId == 0) return Phase.Closed;
-        return getEpochPhase(currentEpoch());
+        return _epochPhase(applications[activeApplicationId], currentEpoch());
     }
 
     function floorPrice() external view returns (uint256) {
@@ -403,11 +461,13 @@ contract MultiEpochAuctionApplicationMVP {
         uint256 appId = _liveApplicationId();
         AuctionApplication storage app = applications[appId];
         if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+
         return epochConfigs[appId][epochId].pricePerTokenWei;
     }
 
     function previousWinningPrice() external view returns (uint256) {
         if (activeApplicationId == 0) return 0;
+
         uint256 epochId = currentEpoch();
         if (epochId <= 1) return 0;
 
@@ -423,12 +483,7 @@ contract MultiEpochAuctionApplicationMVP {
 
     function getEpochRemainingTokens(uint256 epochId) public view returns (uint256) {
         uint256 appId = _liveApplicationId();
-        AuctionApplication storage app = applications[appId];
-        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
-
-        EpochConfig storage cfg = epochConfigs[appId][epochId];
-        EpochRuntime storage rt = epochRuntime[appId][epochId];
-        return rt.tokensSold >= cfg.supplyTokens ? 0 : cfg.supplyTokens - rt.tokensSold;
+        return _remaining(appId, epochId);
     }
 
     function currentEpochRemainingTokens() external view returns (uint256) {
@@ -436,10 +491,13 @@ contract MultiEpochAuctionApplicationMVP {
     }
 
     function getCurrentEpochState() external view returns (uint256 epochId, Phase phase, uint256 remainingTokens) {
-        if (activeApplicationId == 0) return (1, Phase.Closed, 0);
+        if (activeApplicationId == 0) {
+            return (1, Phase.Closed, 0);
+        }
+
         epochId = currentEpoch();
-        phase = getEpochPhase(epochId);
-        remainingTokens = getEpochRemainingTokens(epochId);
+        phase = _epochPhase(applications[activeApplicationId], epochId);
+        remainingTokens = _remaining(activeApplicationId, epochId);
     }
 
     function getEpochSummary(uint256 epochId) external view returns (uint256 winningPrice, uint256 tokensSold, uint256 nextFloorPrice) {
@@ -476,7 +534,7 @@ contract MultiEpochAuctionApplicationMVP {
         soldTokens = rt.tokensSold;
         remainingTokens = rt.tokensSold >= cfg.supplyTokens ? 0 : cfg.supplyTokens - rt.tokensSold;
         finalized = rt.finalized;
-        phase = getEpochPhase(epochId);
+        phase = _epochPhase(app, epochId);
     }
 
     function getUserBid(address user, uint256 epochId)
@@ -497,27 +555,34 @@ contract MultiEpochAuctionApplicationMVP {
         )
     {
         uint256 appId = _liveApplicationId();
-        if (epochId == 0 || epochId > applications[appId].totalEpochs) revert InvalidEpoch();
+        return _getUserBidFor(appId, user, epochId);
+    }
 
-        Bid memory bid = bids[appId][epochId][user];
-        return (
-            bid.commitment,
-            bid.collateral,
-            bid.quantity,
-            bid.pricePerToken,
-            bid.allocatedQuantity,
-            bid.paymentDue,
-            bid.refundDue,
-            bid.revealed,
-            bid.winner,
-            bid.refundWithdrawn,
-            bid.tokensClaimed
-        );
+    function getUserBidFor(uint256 applicationId, address user, uint256 epochId)
+        external
+        view
+        returns (
+            bytes32,
+            uint256,
+            uint256,
+            uint256,
+            uint256,
+            uint256,
+            uint256,
+            bool,
+            bool,
+            bool,
+            bool
+        )
+    {
+        _application(applicationId);
+        return _getUserBidFor(applicationId, user, epochId);
     }
 
     function commitBid(uint256 epochId, bytes32 commitment) external payable whenNotPaused {
         uint256 appId = _liveApplicationId();
         _requireCommitWindow(appId, epochId);
+
         if (commitment == bytes32(0)) revert InvalidCommitment();
         if (msg.value == 0) revert IncorrectPayment(1, 0);
 
@@ -528,6 +593,7 @@ contract MultiEpochAuctionApplicationMVP {
         bid.collateral = msg.value;
         _trackParticipant(appId, epochId, msg.sender);
 
+        emit BidCommitted(appId, epochId, msg.sender, true);
     }
 
     function commitBid(uint256 epochId, uint256 quantity, uint256 pricePerToken, bytes32 salt) external payable whenNotPaused {
@@ -541,8 +607,10 @@ contract MultiEpochAuctionApplicationMVP {
         bid.commitment = commitment;
         bid.collateral = msg.value;
         _trackParticipant(appId, epochId, msg.sender);
+
         _materializeBid(appId, epochId, msg.sender, quantity, pricePerToken);
 
+        emit BidCommitted(appId, epochId, msg.sender, false);
     }
 
     function revealBid(uint256 epochId, uint256 quantity, uint256 pricePerToken, bytes32 salt) external whenNotPaused {
@@ -561,81 +629,68 @@ contract MultiEpochAuctionApplicationMVP {
 
     function finalizeEpoch(uint256 epochId) external whenNotPaused {
         uint256 appId = _liveApplicationId();
-        AuctionApplication storage app = applications[appId];
-        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+        _finalizeEpoch(appId, epochId, DEFAULT_FINALIZE_BATCH);
+    }
 
-        EpochRuntime storage rt = epochRuntime[appId][epochId];
-        if (rt.finalized) revert EpochAlreadyFinalized();
-
-        (, , uint256 revealEnd) = getEpochWindows(epochId);
-        if (block.timestamp < revealEnd) revert EpochNotFinished();
-
-        address[] storage participants = epochParticipants[appId][epochId];
-        for (uint256 i = 0; i < participants.length; i++) {
-            Bid storage bid = bids[appId][epochId][participants[i]];
-            if (!bid.processed && bid.collateral > 0) {
-                bid.refundDue = bid.collateral;
-                bid.processed = true;
-            }
-        }
-
-        rt.finalized = true;
+    function finalizeEpoch(uint256 applicationId, uint256 epochId, uint256 maxParticipants) external whenNotPaused {
+        _finalizeEpoch(applicationId, epochId, maxParticipants);
     }
 
     function claimTokens(uint256[] calldata epochIds) external nonReentrant {
         uint256 appId = _liveApplicationId();
-        AuctionApplication storage app = applications[appId];
+        _claimTokens(appId, epochIds);
+    }
 
-        uint256 wholeTokens;
-        for (uint256 i = 0; i < epochIds.length; i++) {
-            uint256 epochId = epochIds[i];
-            if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
-            if (!epochRuntime[appId][epochId].finalized) revert EpochNotFinalized();
-
-            Bid storage bid = bids[appId][epochId][msg.sender];
-            if (!bid.winner || bid.allocatedQuantity == 0) continue;
-            if (bid.tokensClaimed) revert TokensAlreadyClaimed();
-
-            bid.tokensClaimed = true;
-            wholeTokens += bid.allocatedQuantity;
-        }
-
-        if (wholeTokens == 0) revert NothingToClaim();
-        uint256 tokenUnits = wholeTokens * TOKEN_DECIMALS_SCALE;
-
-        if (!saleToken.transfer(msg.sender, tokenUnits)) revert TransferFailed();
+    function claimTokens(uint256 applicationId, uint256[] calldata epochIds) external nonReentrant {
+        _claimTokens(applicationId, epochIds);
     }
 
     function withdrawRefund(uint256 epochId) external nonReentrant {
         uint256 appId = _liveApplicationId();
-        AuctionApplication storage app = applications[appId];
-        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
-        if (!epochRuntime[appId][epochId].finalized) revert EpochNotFinalized();
+        _withdrawRefund(appId, epochId);
+    }
 
-        Bid storage bid = bids[appId][epochId][msg.sender];
-        if (bid.refundWithdrawn) revert RefundAlreadyWithdrawn();
-        if (bid.refundDue == 0) revert NothingToWithdraw();
-
-        uint256 amount = bid.refundDue;
-        bid.refundWithdrawn = true;
-
-        (bool ok, ) = payable(msg.sender).call{value: amount}("");
-        if (!ok) revert TransferFailed();
+    function withdrawRefund(uint256 applicationId, uint256 epochId) external nonReentrant {
+        _withdrawRefund(applicationId, epochId);
     }
 
     function withdrawTreasury(address payable to, uint256 amountWei) external onlyOwner nonReentrant {
         if (to == address(0)) revert InvalidAddress();
+        if (to != treasury) revert InvalidConfig();
         if (amountWei == 0 || amountWei > treasuryAccrued) revert InvalidConfig();
 
         treasuryAccrued -= amountWei;
+
         (bool ok, ) = to.call{value: amountWei}("");
         if (!ok) revert TransferFailed();
 
+        emit TreasuryWithdrawn(to, amountWei);
     }
 
-    function recoverUnsoldTokens(address to, uint256 tokenUnits) external onlyOwner {
+    function rescueExcessETH(address payable to, uint256 amountWei) external onlyOwner nonReentrant {
         if (to == address(0)) revert InvalidAddress();
-        if (!saleToken.transfer(to, tokenUnits)) revert TransferFailed();
+
+        uint256 reserved = treasuryAccrued + totalRefundLiability;
+        uint256 bal = address(this).balance;
+        if (bal <= reserved) revert NothingToWithdraw();
+
+        uint256 maxExcess = bal - reserved;
+        if (amountWei == 0 || amountWei > maxExcess) revert InvalidConfig();
+
+        (bool ok, ) = to.call{value: amountWei}("");
+        if (!ok) revert TransferFailed();
+
+        emit ExcessEthRescued(to, amountWei);
+    }
+
+    function recoverUnsoldTokens(address to, uint256 tokenUnits) external onlyOwner nonReentrant {
+        uint256 appId = activeApplicationId;
+        if (appId == 0) revert InvalidApplication();
+        _recoverUnsoldTokens(appId, to, tokenUnits);
+    }
+
+    function recoverUnsoldTokens(uint256 applicationId, address to, uint256 tokenUnits) external onlyOwner nonReentrant {
+        _recoverUnsoldTokens(applicationId, to, tokenUnits);
     }
 
     function _materializeBid(uint256 appId, uint256 epochId, address bidder, uint256 quantity, uint256 bidPrice) internal {
@@ -669,14 +724,159 @@ contract MultiEpochAuctionApplicationMVP {
 
         epochRuntime[appId][epochId].tokensSold += allocation;
         epochRuntime[appId][epochId].totalPaymentWei += paymentDue;
-        treasuryAccrued += paymentDue;
 
+        treasuryAccrued += paymentDue;
+        totalRefundLiability += refundDue;
+
+        emit BidRevealed(appId, epochId, bidder, allocation, paymentDue);
+    }
+
+    function _finalizeEpoch(uint256 applicationId, uint256 epochId, uint256 maxParticipants) internal {
+        if (maxParticipants == 0) revert InvalidConfig();
+
+        AuctionApplication storage app = _application(applicationId);
+        if (!_isSettlementStatus(app.status)) revert InvalidStatus();
+        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+
+        EpochRuntime storage rt = epochRuntime[applicationId][epochId];
+        if (rt.finalized) revert EpochAlreadyFinalized();
+
+        (, , uint256 revealEnd) = _epochWindows(app, epochId);
+        if (block.timestamp < revealEnd) revert EpochNotFinished();
+
+        address[] storage participants = epochParticipants[applicationId][epochId];
+        uint256 cursor = finalizeCursor[applicationId][epochId];
+        uint256 total = participants.length;
+        if (cursor > total) cursor = total;
+
+        uint256 end = cursor + maxParticipants;
+        if (end > total) end = total;
+
+        for (uint256 i = cursor; i < end; i++) {
+            Bid storage bid = bids[applicationId][epochId][participants[i]];
+            if (!bid.processed && bid.collateral > 0) {
+                bid.refundDue = bid.collateral;
+                bid.processed = true;
+                totalRefundLiability += bid.collateral;
+            }
+        }
+
+        finalizeCursor[applicationId][epochId] = end;
+        if (end == total) {
+            rt.finalized = true;
+        }
+
+        emit EpochFinalizedProgress(applicationId, epochId, end, total, rt.finalized);
+    }
+
+    function _claimTokens(uint256 applicationId, uint256[] calldata epochIds) internal {
+        AuctionApplication storage app = _application(applicationId);
+        if (!_isSettlementStatus(app.status)) revert InvalidStatus();
+
+        uint256 wholeTokens;
+        for (uint256 i = 0; i < epochIds.length; i++) {
+            uint256 epochId = epochIds[i];
+            if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+            if (!epochRuntime[applicationId][epochId].finalized) revert EpochNotFinalized();
+
+            Bid storage bid = bids[applicationId][epochId][msg.sender];
+            if (!bid.winner || bid.allocatedQuantity == 0) continue;
+            if (bid.tokensClaimed) revert TokensAlreadyClaimed();
+
+            bid.tokensClaimed = true;
+            wholeTokens += bid.allocatedQuantity;
+        }
+
+        if (wholeTokens == 0) revert NothingToClaim();
+
+        uint256 tokenUnits = wholeTokens * tokenUnitScale;
+        if (!saleToken.transfer(msg.sender, tokenUnits)) revert TransferFailed();
+
+        emit TokensClaimed(msg.sender, applicationId, tokenUnits);
+    }
+
+    function _withdrawRefund(uint256 applicationId, uint256 epochId) internal {
+        AuctionApplication storage app = _application(applicationId);
+        if (!_isSettlementStatus(app.status)) revert InvalidStatus();
+        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+        if (!epochRuntime[applicationId][epochId].finalized) revert EpochNotFinalized();
+
+        Bid storage bid = bids[applicationId][epochId][msg.sender];
+        if (bid.refundWithdrawn) revert RefundAlreadyWithdrawn();
+
+        uint256 amount = bid.refundDue;
+        if (amount == 0) revert NothingToWithdraw();
+
+        bid.refundWithdrawn = true;
+        totalRefundLiability -= amount;
+
+        (bool ok, ) = payable(msg.sender).call{value: amount}("");
+        if (!ok) revert TransferFailed();
+
+        emit RefundWithdrawn(msg.sender, applicationId, epochId, amount);
+    }
+
+    function _recoverUnsoldTokens(uint256 applicationId, address to, uint256 tokenUnits) internal {
+        if (to == address(0)) revert InvalidAddress();
+        if (tokenUnits == 0 || tokenUnits % tokenUnitScale != 0) revert InvalidConfig();
+
+        AuctionApplication storage app = _application(applicationId);
+        if (app.status != ApplicationStatus.Closed) revert InvalidStatus();
+        if (!_allEpochsFinalized(applicationId, app.totalEpochs)) revert EpochNotFinalized();
+
+        uint256 requestedWhole = tokenUnits / tokenUnitScale;
+        uint256 availableWhole = _unsoldWholeTokens(applicationId, app.totalEpochs);
+        uint256 recovered = recoveredUnsoldWholeTokens[applicationId];
+        if (requestedWhole > availableWhole || recovered + requestedWhole > availableWhole) revert InvalidConfig();
+
+        recoveredUnsoldWholeTokens[applicationId] = recovered + requestedWhole;
+
+        if (!saleToken.transfer(to, tokenUnits)) revert TransferFailed();
+        emit UnsoldTokensRecovered(applicationId, to, tokenUnits);
     }
 
     function _remaining(uint256 appId, uint256 epochId) internal view returns (uint256) {
+        AuctionApplication storage app = applications[appId];
+        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+
         EpochConfig storage cfg = epochConfigs[appId][epochId];
         EpochRuntime storage rt = epochRuntime[appId][epochId];
         return rt.tokensSold >= cfg.supplyTokens ? 0 : cfg.supplyTokens - rt.tokensSold;
+    }
+
+    function _getUserBidFor(uint256 appId, address user, uint256 epochId)
+        internal
+        view
+        returns (
+            bytes32,
+            uint256,
+            uint256,
+            uint256,
+            uint256,
+            uint256,
+            uint256,
+            bool,
+            bool,
+            bool,
+            bool
+        )
+    {
+        if (epochId == 0 || epochId > applications[appId].totalEpochs) revert InvalidEpoch();
+
+        Bid memory bid = bids[appId][epochId][user];
+        return (
+            bid.commitment,
+            bid.collateral,
+            bid.quantity,
+            bid.pricePerToken,
+            bid.allocatedQuantity,
+            bid.paymentDue,
+            bid.refundDue,
+            bid.revealed,
+            bid.winner,
+            bid.refundWithdrawn,
+            bid.tokensClaimed
+        );
     }
 
     function _trackParticipant(uint256 appId, uint256 epochId, address bidder) internal {
@@ -699,14 +899,42 @@ contract MultiEpochAuctionApplicationMVP {
         AuctionApplication storage app = applications[appId];
         if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
         if (epochId != currentEpoch()) revert CommitWindowClosed();
-        if (getEpochPhase(epochId) != Phase.Commit) revert CommitWindowClosed();
+        if (_epochPhase(app, epochId) != Phase.Commit) revert CommitWindowClosed();
     }
 
     function _requireRevealWindow(uint256 appId, uint256 epochId) internal view {
         AuctionApplication storage app = applications[appId];
         if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
         if (epochId != currentEpoch()) revert RevealWindowClosed();
-        if (getEpochPhase(epochId) != Phase.Reveal) revert RevealWindowClosed();
+        if (_epochPhase(app, epochId) != Phase.Reveal) revert RevealWindowClosed();
+    }
+
+    function _epochWindows(AuctionApplication storage app, uint256 epochId)
+        internal
+        view
+        returns (uint256 startTime, uint256 commitEnd, uint256 revealEnd)
+    {
+        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+
+        startTime = app.startTime + (epochId - 1) * app.epochDuration;
+        commitEnd = startTime + app.commitDuration;
+        revealEnd = commitEnd + app.revealDuration;
+    }
+
+    function _epochPhase(AuctionApplication storage app, uint256 epochId) internal view returns (Phase) {
+        if (epochId == 0 || epochId > app.totalEpochs) revert InvalidEpoch();
+        if (app.status != ApplicationStatus.Live) return Phase.Closed;
+
+        (uint256 startTime, uint256 commitEnd, uint256 revealEnd) = _epochWindows(app, epochId);
+
+        if (block.timestamp < startTime) return Phase.Closed;
+        if (block.timestamp < commitEnd) return Phase.Commit;
+        if (block.timestamp < revealEnd) return Phase.Reveal;
+        return Phase.Closed;
+    }
+
+    function _isSettlementStatus(ApplicationStatus status) internal pure returns (bool) {
+        return status == ApplicationStatus.Live || status == ApplicationStatus.Closed;
     }
 
     function _requireConfigurableStatus(ApplicationStatus status) internal pure {
@@ -723,6 +951,37 @@ contract MultiEpochAuctionApplicationMVP {
             EpochConfig storage cfg = epochConfigs[applicationId][i];
             if (cfg.pricePerTokenWei == 0 || cfg.supplyTokens == 0) return false;
         }
+
         return true;
+    }
+
+    function _allEpochsFinalized(uint256 applicationId, uint256 totalEpochs_) internal view returns (bool) {
+        for (uint256 i = 1; i <= totalEpochs_; i++) {
+            if (!epochRuntime[applicationId][i].finalized) return false;
+        }
+        return true;
+    }
+
+    function _unsoldWholeTokens(uint256 applicationId, uint256 totalEpochs_) internal view returns (uint256) {
+        uint256 totalSupply;
+        uint256 totalSold;
+
+        for (uint256 i = 1; i <= totalEpochs_; i++) {
+            totalSupply += epochConfigs[applicationId][i].supplyTokens;
+            totalSold += epochRuntime[applicationId][i].tokensSold;
+        }
+
+        return totalSold >= totalSupply ? 0 : totalSupply - totalSold;
+    }
+
+    function _detectTokenUnitScale(address token) internal view returns (uint256) {
+        (bool ok, bytes memory data) = token.staticcall(abi.encodeWithSignature("decimals()"));
+        if (!ok || data.length < 32) {
+            return DEFAULT_TOKEN_SCALE;
+        }
+
+        uint8 decimals = abi.decode(data, (uint8));
+        if (decimals > 77) revert InvalidConfig();
+        return 10 ** uint256(decimals);
     }
 }

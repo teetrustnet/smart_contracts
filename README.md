@@ -54,4 +54,5 @@ Important MVP semantics:
 ## Docs
 
 - `docs/AUCTION_APPLICATION_MVP.md`
+- `docs/SECURITY_AUDIT_3L_2026-04-17.md`
 - `contracts/README.md`

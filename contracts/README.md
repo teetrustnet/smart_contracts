@@ -21,6 +21,10 @@
 - Bid entry:
   - legacy commit/reveal: `commitBid(epochId, commitment)` + `revealBid(...)`
   - one-step commit: `commitBid(epochId, quantity, pricePerToken, salt)`
+- Security-hardening paths:
+  - batched finalize: `finalizeEpoch(applicationId, epochId, maxParticipants)`
+  - post-close settlement by appId: `claimTokens(applicationId, epochIds)` / `withdrawRefund(applicationId, epochId)`
+  - strict treasury destination + excess ETH rescue guard
 
 ## Quantity / Value Semantics
 

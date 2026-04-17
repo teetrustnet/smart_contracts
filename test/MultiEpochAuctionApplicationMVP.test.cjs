@@ -123,6 +123,78 @@ describe("MultiEpochAuctionApplicationMVP", function () {
     expect(bid[8]).to.equal(true);
   });
 
+  it("allows settlement after close via explicit applicationId functions", async function () {
+    const { owner, bidderA, auction } = await deployFixture();
+
+    const appId = await createConfiguredApplication(auction, owner, bidderA, {
+      totalEpochs: 2,
+      epochDuration: 180,
+      commitDuration: 120,
+      revealDuration: 60,
+      maxQuantityPerBid: 10_000,
+    });
+
+    const latest = await ethers.provider.getBlock("latest");
+    const startTime = latest.timestamp + 20;
+    await (await auction.connect(owner).launchAuctionApplication(appId, startTime)).wait();
+
+    const qty = 40n;
+    const price = await auction.floorPriceForEpoch(1);
+    const salt = ethers.id("close-path-salt");
+    const commitment = ethers.solidityPackedKeccak256(
+      ["uint256", "address", "uint256", "uint256", "bytes32"],
+      [1n, bidderA.address, qty, price, salt],
+    );
+
+    await time.increaseTo(startTime + 1);
+    await auction.connect(bidderA)["commitBid(uint256,bytes32)"](1, commitment, {
+      value: qty * price,
+    });
+
+    await time.increaseTo(startTime + 181);
+    await (await auction.connect(owner).closeAuctionApplication(appId)).wait();
+
+    await (await auction.finalizeEpoch(appId, 1, 100)).wait();
+
+    const bidAfterFinalize = await auction.getUserBidFor(appId, bidderA.address, 1);
+    expect(bidAfterFinalize[6]).to.equal(qty * price);
+
+    await (await auction.connect(bidderA)["withdrawRefund(uint256,uint256)"](appId, 1)).wait();
+
+    const bidAfterRefund = await auction.getUserBidFor(appId, bidderA.address, 1);
+    expect(bidAfterRefund[9]).to.equal(true);
+  });
+
+  it("restricts treasury withdrawal target to configured treasury", async function () {
+    const { owner, bidderA, treasury, auction } = await deployFixture();
+
+    const appId = await createConfiguredApplication(auction, owner, bidderA, {
+      totalEpochs: 2,
+      epochDuration: 180,
+      commitDuration: 120,
+      revealDuration: 60,
+      maxQuantityPerBid: 10_000,
+    });
+
+    const latest = await ethers.provider.getBlock("latest");
+    const startTime = latest.timestamp + 20;
+    await (await auction.connect(owner).launchAuctionApplication(appId, startTime)).wait();
+
+    await time.increaseTo(startTime + 1);
+    const price = await auction.floorPriceForEpoch(1);
+    await auction.connect(bidderA).commitBid(1, 100n, price, ethers.id("treasury-test"), {
+      value: 100n * price,
+    });
+
+    await expect(
+      auction.connect(owner).withdrawTreasury(owner.address, 1n),
+    ).to.be.revertedWithCustomError(auction, "InvalidConfig");
+
+    await expect(
+      auction.connect(owner).withdrawTreasury(treasury.address, 1n),
+    ).to.not.be.reverted;
+  });
+
   it("keeps legacy commitBid(epochId, commitment) + revealBid compatibility", async function () {
     const { owner, bidderA, auction } = await deployFixture();
 
