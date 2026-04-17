@@ -13,6 +13,12 @@ Follow official flow:
    - `createArg`
    - `signature`
 
+This flow is implemented in backend module:
+
+- `backend/fourmeme-client.cjs`
+- `backend/service.cjs`
+- `backend/server.cjs`
+
 References:
 - https://four-meme.gitbook.io/four.meme/brand/protocol-integration
 
@@ -53,3 +59,4 @@ Contract will:
 - If you plan claims from this auction contract, ensure token inventory is available to contract address.
 - If Four.meme token economics route supply elsewhere by default, add treasury/creator transfer step to fund claim inventory.
 - Re-launch is blocked per application by `fourMemeLaunchExecuted`.
+- Backend endpoint is idempotent by checking `fourMemeLaunchExecuted(applicationId)` before launch.
