@@ -19,6 +19,12 @@ This flow is implemented in backend module:
 - `backend/service.cjs`
 - `backend/server.cjs`
 
+Rate-limit controls included:
+
+- access token cache (TTL configurable)
+- 429/5xx retry with backoff + jitter
+- launch queue serialization + per-application in-flight guard
+
 References:
 - https://four-meme.gitbook.io/four.meme/brand/protocol-integration
 

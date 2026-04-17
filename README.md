@@ -62,6 +62,10 @@ A minimal backend service is included at `backend/server.cjs`.
 
 - Health check: `GET /healthz`
 - Launch endpoint: `POST /auction/:applicationId/fourmeme/launch`
+- Built-in rate-limit hardening:
+  - cached four.meme access token (`FOUR_MEME_ACCESS_TOKEN_TTL_MS`)
+  - 429/5xx retry with exponential backoff (`FOUR_MEME_MAX_RETRIES`, `FOUR_MEME_RETRY_BASE_MS`)
+  - launch queue + in-flight guard (`BACKEND_LAUNCH_QUEUE_CONCURRENCY`)
 
 Example curl:
 

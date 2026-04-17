@@ -10,6 +10,41 @@ const AUCTION_ABI = [
   "function launchedTokenByApplication(uint256) view returns (address)",
 ];
 
+function createTaskQueue(concurrency = 1) {
+  let active = 0;
+  const pending = [];
+
+  const pump = () => {
+    while (active < concurrency && pending.length > 0) {
+      const item = pending.shift();
+      active += 1;
+
+      Promise.resolve()
+        .then(item.task)
+        .then(item.resolve, item.reject)
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
+    }
+  };
+
+  return {
+    get size() {
+      return pending.length;
+    },
+    get active() {
+      return active;
+    },
+    enqueue(task) {
+      return new Promise((resolve, reject) => {
+        pending.push({ task, resolve, reject });
+        pump();
+      });
+    },
+  };
+}
+
 async function main() {
   const app = express();
   app.use(express.json({ limit: "2mb" }));
@@ -29,11 +64,27 @@ async function main() {
     region: env("FOUR_MEME_REGION", "WEB"),
     langType: env("FOUR_MEME_LANG", "EN"),
     walletName: env("FOUR_MEME_WALLET_NAME", "TrustNetBackend"),
+    accessTokenTtlMs: intEnv("FOUR_MEME_ACCESS_TOKEN_TTL_MS", 50 * 60 * 1000),
+    maxRetries: intEnv("FOUR_MEME_MAX_RETRIES", 3),
+    retryBaseMs: intEnv("FOUR_MEME_RETRY_BASE_MS", 800),
   });
+
+  const queueConcurrency = Math.max(1, intEnv("BACKEND_LAUNCH_QUEUE_CONCURRENCY", 1));
+  const launchQueue = createTaskQueue(queueConcurrency);
+  const inFlightByApplication = new Map();
 
   app.get("/healthz", async (_req, res) => {
     const block = await provider.getBlockNumber();
-    res.json({ ok: true, block, signer: signer.address });
+    res.json({
+      ok: true,
+      block,
+      signer: signer.address,
+      queue: {
+        active: launchQueue.active,
+        pending: launchQueue.size,
+        inFlightApplications: inFlightByApplication.size,
+      },
+    });
   });
 
   app.post("/auction/:applicationId/fourmeme/launch", async (req, res) => {
@@ -47,14 +98,36 @@ async function main() {
       return res.status(400).json({ error: "createTokenRequest is required" });
     }
 
-    try {
-      const result = await launchFourMemeForApplication({
-        applicationId,
-        createTokenRequest,
-        launchFeeWei,
-        contract,
-        fourMemeClient,
+    if (inFlightByApplication.has(applicationId)) {
+      return res.status(409).json({
+        ok: false,
+        error: `launch already in progress for application ${applicationId}`,
       });
+    }
+
+    try {
+      const alreadyLaunched = await contract.fourMemeLaunchExecuted(applicationId);
+      if (alreadyLaunched) {
+        const launchedToken = await contract.launchedTokenByApplication(applicationId);
+        return res.status(409).json({
+          ok: false,
+          error: `application ${applicationId} already launched on four.meme`,
+          launchedToken,
+        });
+      }
+
+      const launchPromise = launchQueue.enqueue(() =>
+        launchFourMemeForApplication({
+          applicationId,
+          createTokenRequest,
+          launchFeeWei,
+          contract,
+          fourMemeClient,
+        }),
+      );
+
+      inFlightByApplication.set(applicationId, launchPromise);
+      const result = await launchPromise;
       return res.json({ ok: true, result });
     } catch (error) {
       if (error instanceof LaunchConflictError) {
@@ -68,6 +141,8 @@ async function main() {
 
       const message = error instanceof Error ? error.message : "unknown error";
       return res.status(500).json({ ok: false, error: message });
+    } finally {
+      inFlightByApplication.delete(applicationId);
     }
   });
 
