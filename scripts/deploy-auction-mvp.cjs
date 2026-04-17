@@ -5,7 +5,6 @@ const { ethers, network } = require("hardhat");
 const ERC20_ABI = [
   "function balanceOf(address account) view returns (uint256)",
   "function transfer(address to, uint256 amount) returns (bool)",
-  "function mint(address to, uint256 amount)",
 ];
 
 function readNumber(name, fallback) {
@@ -93,29 +92,9 @@ async function main() {
   const startDelaySeconds = readNumber("MVP_START_DELAY_SECONDS", 120);
   const startTime = readNumber("MVP_START_TIME", now + startDelaySeconds);
 
-  const existingTokenAddress = readAddress("MVP_SALE_TOKEN_ADDRESS");
-  const mintMultiplier = readBigInt("MVP_MINT_MULTIPLIER", "2");
-  const seedAuctionWithTokens = readBoolean("MVP_SEED_AUCTION_WITH_TOKENS", !existingTokenAddress);
-
-  let token;
-  let tokenAddress;
-  let tokenMode;
-
-  if (existingTokenAddress) {
-    tokenAddress = existingTokenAddress;
-    token = new ethers.Contract(existingTokenAddress, ERC20_ABI, deployer);
-    tokenMode = "existing";
-  } else {
-    const MockSaleToken = await ethers.getContractFactory("MockSaleToken");
-    token = await MockSaleToken.deploy();
-    await token.waitForDeployment();
-
-    tokenAddress = await token.getAddress();
-    tokenMode = "mock";
-
-    const mintAmount = totalAuctionSupplyTokens * mintMultiplier * 10n ** 18n;
-    await (await token.mint(deployer.address, mintAmount)).wait();
-  }
+  const tokenAddress = readAddress("MVP_SALE_TOKEN_ADDRESS", deployer.address);
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, deployer);
+  const seedAuctionWithTokens = readBoolean("MVP_SEED_AUCTION_WITH_TOKENS", false);
 
   const Auction = await ethers.getContractFactory("MultiEpochAuctionApplicationMVP");
   const auction = await Auction.deploy(tokenAddress, treasuryAddress);
@@ -171,7 +150,6 @@ async function main() {
   }
 
   console.log("SaleToken:", tokenAddress);
-  console.log("SaleTokenMode:", tokenMode);
   console.log("MultiEpochAuctionApplicationMVP:", await auction.getAddress());
   console.log("Treasury:", treasuryAddress);
   console.log("ApplicationId:", appId.toString());

@@ -7,16 +7,10 @@
     "clean": "node -e \"const fs=require('fs'); ['artifacts-hardhat','cache-hardhat'].forEach((dir)=>fs.rmSync(dir,{ recursive:true, force:true }));\"",
     "compile": "node ./node_modules/hardhat/internal/cli/bootstrap.js compile --config hardhat.config.cjs",
     "test": "node ./node_modules/hardhat/internal/cli/bootstrap.js test --config hardhat.config.cjs",
-    "deploy:local": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network hardhat --config hardhat.config.cjs",
-    "deploy:testnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network bscTestnet --config hardhat.config.cjs",
-    "deploy:mainnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction.cjs --network bsc --config hardhat.config.cjs",
-    "deploy:fixed:local": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-fixed-auction.cjs --network hardhat --config hardhat.config.cjs",
-    "deploy:fixed:testnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-fixed-auction.cjs --network bscTestnet --config hardhat.config.cjs",
-    "deploy:fixed:mainnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-fixed-auction.cjs --network bsc --config hardhat.config.cjs",
     "deploy:mvp:local": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction-mvp.cjs --network hardhat --config hardhat.config.cjs",
     "deploy:mvp:testnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction-mvp.cjs --network bscTestnet --config hardhat.config.cjs",
     "deploy:mvp:mainnet": "node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy-auction-mvp.cjs --network bsc --config hardhat.config.cjs",
-    "smoke:local": "npm run compile && npm run test && npm run deploy:local"
+    "smoke:local": "npm run compile && npm run test"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.2",

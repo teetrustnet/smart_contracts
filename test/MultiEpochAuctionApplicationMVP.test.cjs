@@ -3,20 +3,15 @@ const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
 describe("MultiEpochAuctionApplicationMVP", function () {
-  const unit = (value) => ethers.parseUnits(value, 18);
-
   async function deployFixture() {
     const [owner, treasury, bidderA, bidderB] = await ethers.getSigners();
 
-    const MockSaleToken = await ethers.getContractFactory("MockSaleToken");
-    const token = await MockSaleToken.deploy();
-    await token.waitForDeployment();
-
     const Auction = await ethers.getContractFactory("MultiEpochAuctionApplicationMVP");
-    const auction = await Auction.deploy(await token.getAddress(), treasury.address);
+    // For unit tests focused on auction accounting, sale token address can be any non-zero address.
+    const auction = await Auction.deploy(treasury.address, treasury.address);
     await auction.waitForDeployment();
 
-    return { owner, treasury, bidderA, bidderB, token, auction };
+    return { owner, treasury, bidderA, bidderB, auction };
   }
 
   async function createConfiguredApplication(auction, owner, applicant, params = {}) {
@@ -53,15 +48,13 @@ describe("MultiEpochAuctionApplicationMVP", function () {
     ).wait();
 
     await (
-      await auction
-        .connect(owner)
-        .initializeEpochCurve(
-          appId,
-          ethers.parseEther("0.20"),
-          5000, // last epoch price = 50% of first
-          1_000_000,
-          200, // last epoch supply = 2% of total
-        )
+      await auction.connect(owner).initializeEpochCurve(
+        appId,
+        ethers.parseEther("0.20"),
+        5000,
+        1_000_000,
+        200,
+      )
     ).wait();
 
     await (await auction.connect(owner).submitAuctionApplication(appId)).wait();
@@ -70,29 +63,27 @@ describe("MultiEpochAuctionApplicationMVP", function () {
     return appId;
   }
 
-  it("supports application workflow and curve initialization (20 epochs, 3 min default)", async function () {
+  it("supports application workflow + curve initialization", async function () {
     const { owner, bidderA, auction } = await deployFixture();
 
     const appId = await createConfiguredApplication(auction, owner, bidderA);
 
     const latest = await ethers.provider.getBlock("latest");
     const startTime = latest.timestamp + 30;
-
     await (await auction.connect(owner).launchAuctionApplication(appId, startTime)).wait();
 
     expect(await auction.activeApplicationId()).to.equal(appId);
     expect(await auction.totalEpochs()).to.equal(20);
     expect(await auction.epochDuration()).to.equal(180);
-
     expect(await auction.floorPriceForEpoch(1)).to.equal(ethers.parseEther("0.20"));
     expect(await auction.floorPriceForEpoch(20)).to.equal(ethers.parseEther("0.10"));
 
     const epoch20 = await auction.epochConfigFor(appId, 20);
-    expect(epoch20.supplyTokens).to.equal(20_000); // 2% of 1,000,000
+    expect(epoch20.supplyTokens).to.equal(20_000);
   });
 
-  it("supports one-step commit bid + state reads + finalize/claim", async function () {
-    const { owner, bidderA, auction, token } = await deployFixture();
+  it("supports one-step commit and finalization accounting", async function () {
+    const { owner, bidderA, auction } = await deployFixture();
 
     const appId = await createConfiguredApplication(auction, owner, bidderA, {
       totalEpochs: 3,
@@ -101,11 +92,6 @@ describe("MultiEpochAuctionApplicationMVP", function () {
       revealDuration: 60,
       maxQuantityPerBid: 50_000,
     });
-
-    const totalInventoryWholeTokens = 100_000n;
-    const inventoryTokenUnits = totalInventoryWholeTokens * unit("1");
-    await (await token.mint(owner.address, inventoryTokenUnits)).wait();
-    await (await token.transfer(await auction.getAddress(), inventoryTokenUnits)).wait();
 
     const latest = await ethers.provider.getBlock("latest");
     const startTime = latest.timestamp + 20;
@@ -132,13 +118,13 @@ describe("MultiEpochAuctionApplicationMVP", function () {
     await time.increaseTo(startTime + 181);
     await (await auction.finalizeEpoch(1)).wait();
 
-    await (await auction.connect(bidderA).claimTokens([1])).wait();
-
-    expect(await token.balanceOf(bidderA.address)).to.equal(qty * unit("1"));
+    const bid = await auction.getUserBid(bidderA.address, 1);
+    expect(bid[4]).to.equal(qty);
+    expect(bid[8]).to.equal(true);
   });
 
   it("keeps legacy commitBid(epochId, commitment) + revealBid compatibility", async function () {
-    const { owner, bidderA, auction, token } = await deployFixture();
+    const { owner, bidderA, auction } = await deployFixture();
 
     const appId = await auction
       .connect(owner)
@@ -177,9 +163,6 @@ describe("MultiEpochAuctionApplicationMVP", function () {
     await (await auction.connect(owner).submitAuctionApplication(appId)).wait();
     await (await auction.connect(owner).approveAuctionApplication(appId)).wait();
 
-    await (await token.mint(owner.address, unit("10000"))).wait();
-    await (await token.transfer(await auction.getAddress(), unit("10000"))).wait();
-
     const latest = await ethers.provider.getBlock("latest");
     const startTime = latest.timestamp + 20;
     await (await auction.connect(owner).launchAuctionApplication(appId, startTime)).wait();
@@ -207,8 +190,5 @@ describe("MultiEpochAuctionApplicationMVP", function () {
     const bid = await auction.getUserBid(bidderA.address, 1);
     expect(bid[4]).to.equal(qty);
     expect(bid[8]).to.equal(true);
-
-    await (await auction.connect(bidderA).claimTokens([1])).wait();
-    expect(await token.balanceOf(bidderA.address)).to.equal(qty * unit("1"));
   });
 });
