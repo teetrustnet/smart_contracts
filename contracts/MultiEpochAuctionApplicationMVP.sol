@@ -114,57 +114,6 @@ contract MultiEpochAuctionApplicationMVP {
 
     uint256 private lockState = 1;
 
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event PauseStateChanged(bool paused);
-    event TreasuryUpdated(address indexed newTreasury);
-
-    event AuctionApplicationCreated(uint256 indexed applicationId, address indexed applicant, string metadataURI);
-    event AuctionApplicationStatusChanged(uint256 indexed applicationId, ApplicationStatus status);
-    event AuctionApplicationRejected(uint256 indexed applicationId, string reason);
-
-    event EpochConfigSet(uint256 indexed applicationId, uint256 indexed epochId, uint256 pricePerTokenWei, uint256 supplyTokens);
-    event EpochCurveInitialized(
-        uint256 indexed applicationId,
-        uint256 firstEpochPriceWei,
-        uint16 lastEpochPriceBps,
-        uint256 totalSupplyTokens,
-        uint16 lastEpochSupplyBps
-    );
-
-    event BidCommitted(
-        uint256 indexed applicationId,
-        uint256 indexed epochId,
-        address indexed bidder,
-        bytes32 commitment,
-        uint256 collateral,
-        bool legacyCommitOnly
-    );
-
-    event BidRevealed(
-        uint256 indexed applicationId,
-        uint256 indexed epochId,
-        address indexed bidder,
-        uint256 quantity,
-        uint256 pricePerToken,
-        uint256 allocatedQuantity,
-        uint256 paymentDue,
-        uint256 refundDue
-    );
-
-    event EpochFinalized(
-        uint256 indexed applicationId,
-        uint256 indexed epochId,
-        uint256 pricePerTokenWei,
-        uint256 supplyTokens,
-        uint256 tokensSold,
-        uint256 remainingTokens
-    );
-
-    event TokensClaimed(address indexed bidder, uint256 tokenUnits);
-    event RefundWithdrawn(uint256 indexed applicationId, uint256 indexed epochId, address indexed bidder, uint256 amountWei);
-    event TreasuryWithdrawn(address indexed to, uint256 amountWei);
-    event UnsoldTokensRecovered(address indexed to, uint256 tokenUnits);
-
     modifier onlyOwner() {
         if (msg.sender != owner) revert Unauthorized();
         _;
@@ -187,32 +136,26 @@ contract MultiEpochAuctionApplicationMVP {
         saleToken = IERC20Like(saleToken_);
         owner = msg.sender;
         treasury = treasury_;
-        emit OwnershipTransferred(address(0), msg.sender);
     }
 
     receive() external payable {}
 
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert InvalidAddress();
-        address prev = owner;
         owner = newOwner;
-        emit OwnershipTransferred(prev, newOwner);
     }
 
     function setTreasury(address newTreasury) external onlyOwner {
         if (newTreasury == address(0)) revert InvalidAddress();
         treasury = newTreasury;
-        emit TreasuryUpdated(newTreasury);
     }
 
     function pause() external onlyOwner {
         paused = true;
-        emit PauseStateChanged(true);
     }
 
     function unpause() external onlyOwner {
         paused = false;
-        emit PauseStateChanged(false);
     }
 
     function createAuctionApplication(
@@ -253,14 +196,12 @@ contract MultiEpochAuctionApplicationMVP {
             maxQuantityPerBid: maxQuantityPerBid_
         });
 
-        emit AuctionApplicationCreated(applicationId, applicant, metadataURI);
     }
 
     function submitAuctionApplication(uint256 applicationId) external onlyOwner {
         AuctionApplication storage app = _application(applicationId);
         if (app.status != ApplicationStatus.Draft) revert InvalidStatus();
         app.status = ApplicationStatus.Submitted;
-        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function approveAuctionApplication(uint256 applicationId) external onlyOwner {
@@ -268,7 +209,6 @@ contract MultiEpochAuctionApplicationMVP {
         if (app.status != ApplicationStatus.Submitted) revert InvalidStatus();
         if (!_isApplicationEpochConfigured(applicationId)) revert InvalidConfig();
         app.status = ApplicationStatus.Approved;
-        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function rejectAuctionApplication(uint256 applicationId, string calldata reason) external onlyOwner {
@@ -276,8 +216,6 @@ contract MultiEpochAuctionApplicationMVP {
         if (app.status != ApplicationStatus.Submitted && app.status != ApplicationStatus.Approved) revert InvalidStatus();
         app.status = ApplicationStatus.Rejected;
         app.rejectReason = reason;
-        emit AuctionApplicationRejected(applicationId, reason);
-        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function launchAuctionApplication(uint256 applicationId, uint256 startTime) external onlyOwner {
@@ -292,7 +230,6 @@ contract MultiEpochAuctionApplicationMVP {
         app.status = ApplicationStatus.Live;
         app.startTime = startTime;
         activeApplicationId = applicationId;
-        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function closeAuctionApplication(uint256 applicationId) external onlyOwner {
@@ -300,7 +237,6 @@ contract MultiEpochAuctionApplicationMVP {
         if (app.status != ApplicationStatus.Live) revert InvalidStatus();
         app.status = ApplicationStatus.Closed;
         if (activeApplicationId == applicationId) activeApplicationId = 0;
-        emit AuctionApplicationStatusChanged(applicationId, app.status);
     }
 
     function getApplication(uint256 applicationId) external view returns (AuctionApplication memory) {
@@ -317,7 +253,6 @@ contract MultiEpochAuctionApplicationMVP {
         if (epochId == 0 || epochId > app.totalEpochs || pricePerTokenWei == 0 || supplyTokens == 0) revert InvalidConfig();
 
         epochConfigs[applicationId][epochId] = EpochConfig(pricePerTokenWei, supplyTokens);
-        emit EpochConfigSet(applicationId, epochId, pricePerTokenWei, supplyTokens);
     }
 
     function setEpochConfigs(uint256 applicationId, uint256[] calldata pricesPerTokenWei, uint256[] calldata supplyTokens) external onlyOwner {
@@ -329,7 +264,6 @@ contract MultiEpochAuctionApplicationMVP {
             if (pricesPerTokenWei[i] == 0 || supplyTokens[i] == 0) revert InvalidConfig();
             uint256 epochId = i + 1;
             epochConfigs[applicationId][epochId] = EpochConfig(pricesPerTokenWei[i], supplyTokens[i]);
-            emit EpochConfigSet(applicationId, epochId, pricesPerTokenWei[i], supplyTokens[i]);
         }
     }
 
@@ -356,8 +290,6 @@ contract MultiEpochAuctionApplicationMVP {
 
         if (n == 1) {
             epochConfigs[applicationId][1] = EpochConfig(firstEpochPriceWei, totalSupplyTokens);
-            emit EpochConfigSet(applicationId, 1, firstEpochPriceWei, totalSupplyTokens);
-            emit EpochCurveInitialized(applicationId, firstEpochPriceWei, lastEpochPriceBps, totalSupplyTokens, lastEpochSupplyBps);
             return;
         }
 
@@ -380,16 +312,13 @@ contract MultiEpochAuctionApplicationMVP {
             }
 
             epochConfigs[applicationId][i] = EpochConfig(price, supply);
-            emit EpochConfigSet(applicationId, i, price, supply);
         }
 
         if (assigned < frontSupply) {
             EpochConfig storage cfg = epochConfigs[applicationId][1];
             cfg.supplyTokens += (frontSupply - assigned);
-            emit EpochConfigSet(applicationId, 1, cfg.pricePerTokenWei, cfg.supplyTokens);
         }
 
-        emit EpochCurveInitialized(applicationId, firstEpochPriceWei, lastEpochPriceBps, totalSupplyTokens, lastEpochSupplyBps);
     }
 
     function epochConfigFor(uint256 applicationId, uint256 epochId) external view returns (EpochConfig memory) {
@@ -599,7 +528,6 @@ contract MultiEpochAuctionApplicationMVP {
         bid.collateral = msg.value;
         _trackParticipant(appId, epochId, msg.sender);
 
-        emit BidCommitted(appId, epochId, msg.sender, commitment, msg.value, true);
     }
 
     function commitBid(uint256 epochId, uint256 quantity, uint256 pricePerToken, bytes32 salt) external payable whenNotPaused {
@@ -615,7 +543,6 @@ contract MultiEpochAuctionApplicationMVP {
         _trackParticipant(appId, epochId, msg.sender);
         _materializeBid(appId, epochId, msg.sender, quantity, pricePerToken);
 
-        emit BidCommitted(appId, epochId, msg.sender, commitment, msg.value, false);
     }
 
     function revealBid(uint256 epochId, uint256 quantity, uint256 pricePerToken, bytes32 salt) external whenNotPaused {
@@ -653,9 +580,6 @@ contract MultiEpochAuctionApplicationMVP {
         }
 
         rt.finalized = true;
-        EpochConfig storage cfg = epochConfigs[appId][epochId];
-        uint256 remaining = rt.tokensSold >= cfg.supplyTokens ? 0 : cfg.supplyTokens - rt.tokensSold;
-        emit EpochFinalized(appId, epochId, cfg.pricePerTokenWei, cfg.supplyTokens, rt.tokensSold, remaining);
     }
 
     function claimTokens(uint256[] calldata epochIds) external nonReentrant {
@@ -680,7 +604,6 @@ contract MultiEpochAuctionApplicationMVP {
         uint256 tokenUnits = wholeTokens * TOKEN_DECIMALS_SCALE;
 
         if (!saleToken.transfer(msg.sender, tokenUnits)) revert TransferFailed();
-        emit TokensClaimed(msg.sender, tokenUnits);
     }
 
     function withdrawRefund(uint256 epochId) external nonReentrant {
@@ -698,7 +621,6 @@ contract MultiEpochAuctionApplicationMVP {
 
         (bool ok, ) = payable(msg.sender).call{value: amount}("");
         if (!ok) revert TransferFailed();
-        emit RefundWithdrawn(appId, epochId, msg.sender, amount);
     }
 
     function withdrawTreasury(address payable to, uint256 amountWei) external onlyOwner nonReentrant {
@@ -709,13 +631,11 @@ contract MultiEpochAuctionApplicationMVP {
         (bool ok, ) = to.call{value: amountWei}("");
         if (!ok) revert TransferFailed();
 
-        emit TreasuryWithdrawn(to, amountWei);
     }
 
     function recoverUnsoldTokens(address to, uint256 tokenUnits) external onlyOwner {
         if (to == address(0)) revert InvalidAddress();
         if (!saleToken.transfer(to, tokenUnits)) revert TransferFailed();
-        emit UnsoldTokensRecovered(to, tokenUnits);
     }
 
     function _materializeBid(uint256 appId, uint256 epochId, address bidder, uint256 quantity, uint256 bidPrice) internal {
@@ -751,7 +671,6 @@ contract MultiEpochAuctionApplicationMVP {
         epochRuntime[appId][epochId].totalPaymentWei += paymentDue;
         treasuryAccrued += paymentDue;
 
-        emit BidRevealed(appId, epochId, bidder, quantity, bidPrice, allocation, paymentDue, refundDue);
     }
 
     function _remaining(uint256 appId, uint256 epochId) internal view returns (uint256) {
