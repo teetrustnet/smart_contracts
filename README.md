@@ -40,7 +40,7 @@ Important MVP semantics:
 
 - `quantity` is interpreted as **whole-token count**.
 - collateral is `quantity * pricePerTokenWei`.
-- claimed transfer amount is `quantity * 1e18` token units.
+- claimed transfer amount is `quantity * tokenUnitScale` (auto-detected from token decimals; fallback 1e18).
 
 ## MVP Highlights
 
@@ -50,9 +50,13 @@ Important MVP semantics:
 - Legacy compatibility path: `commitBid(epochId, commitment)` + `revealBid(...)`
 - One-step path: `commitBid(epochId, quantity, pricePerToken, salt)`
 - Runtime view helpers for frontend snapshot and epoch summary
+- Post-auction Four.meme token launch hook:
+  - `setFourMemeTokenManager(address)`
+  - `launchFourMemeToken(applicationId, createArgs, signature)` (payable)
 
 ## Docs
 
 - `docs/AUCTION_APPLICATION_MVP.md`
+- `docs/FOUR_MEME_INTEGRATION.md`
 - `docs/SECURITY_AUDIT_3L_2026-04-17.md`
 - `contracts/README.md`

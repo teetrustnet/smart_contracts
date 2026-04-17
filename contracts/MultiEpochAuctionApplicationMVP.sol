@@ -5,6 +5,12 @@ interface IERC20Like {
     function transfer(address to, uint256 amount) external returns (bool);
 }
 
+interface IFourMemeTokenManager2 {
+    function createToken(bytes calldata args, bytes calldata signature) external payable;
+    function _tokenCount() external view returns (uint256);
+    function _tokens(uint256 index) external view returns (address);
+}
+
 contract MultiEpochAuctionApplicationMVP {
     uint256 public constant BPS = 10_000;
     uint256 public constant DEFAULT_TOKEN_SCALE = 1e18;
@@ -40,6 +46,9 @@ contract MultiEpochAuctionApplicationMVP {
     error NothingToWithdraw();
     error RefundAlreadyWithdrawn();
     error TokensAlreadyClaimed();
+    error SaleTokenNotConfigured();
+    error FourMemeNotConfigured();
+    error FourMemeLaunchAlreadyExecuted();
     error TransferFailed();
 
     enum Phase {
@@ -97,8 +106,10 @@ contract MultiEpochAuctionApplicationMVP {
         bool processed;
     }
 
-    IERC20Like public immutable saleToken;
-    uint256 public immutable tokenUnitScale;
+    address public saleToken;
+    uint256 public tokenUnitScale;
+
+    address public fourMemeTokenManager;
 
     address public owner;
     address public treasury;
@@ -121,11 +132,16 @@ contract MultiEpochAuctionApplicationMVP {
     mapping(uint256 => mapping(uint256 => uint256)) private finalizeCursor;
     mapping(uint256 => uint256) public recoveredUnsoldWholeTokens;
 
+    mapping(uint256 => address) public launchedTokenByApplication;
+    mapping(uint256 => bool) public fourMemeLaunchExecuted;
+
     uint256 private lockState = 1;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event PauseStateChanged(bool paused);
     event TreasuryUpdated(address indexed previousTreasury, address indexed newTreasury);
+    event SaleTokenConfigured(address indexed saleToken, uint256 tokenUnitScale);
+    event FourMemeTokenManagerUpdated(address indexed manager);
 
     event AuctionApplicationCreated(uint256 indexed applicationId, address indexed applicant, string metadataURI);
     event AuctionApplicationStatusChanged(uint256 indexed applicationId, ApplicationStatus status);
@@ -139,6 +155,7 @@ contract MultiEpochAuctionApplicationMVP {
     event RefundWithdrawn(address indexed bidder, uint256 indexed applicationId, uint256 indexed epochId, uint256 amountWei);
     event TreasuryWithdrawn(address indexed to, uint256 amountWei);
     event UnsoldTokensRecovered(uint256 indexed applicationId, address indexed to, uint256 tokenUnits);
+    event FourMemeTokenLaunched(uint256 indexed applicationId, address indexed token, uint256 launchFeeWei);
     event ExcessEthRescued(address indexed to, uint256 amountWei);
 
     modifier onlyOwner() {
@@ -159,10 +176,15 @@ contract MultiEpochAuctionApplicationMVP {
     }
 
     constructor(address saleToken_, address treasury_) {
-        if (saleToken_ == address(0) || treasury_ == address(0)) revert InvalidAddress();
+        if (treasury_ == address(0)) revert InvalidAddress();
 
-        saleToken = IERC20Like(saleToken_);
-        tokenUnitScale = _detectTokenUnitScale(saleToken_);
+        if (saleToken_ != address(0)) {
+            saleToken = saleToken_;
+            tokenUnitScale = _detectTokenUnitScale(saleToken_);
+            emit SaleTokenConfigured(saleToken_, tokenUnitScale);
+        } else {
+            tokenUnitScale = DEFAULT_TOKEN_SCALE;
+        }
 
         owner = msg.sender;
         treasury = treasury_;
@@ -184,6 +206,22 @@ contract MultiEpochAuctionApplicationMVP {
         address previous = treasury;
         treasury = newTreasury;
         emit TreasuryUpdated(previous, newTreasury);
+    }
+
+    function setSaleToken(address saleToken_) external onlyOwner {
+        if (saleToken_ == address(0)) revert InvalidAddress();
+        if (saleToken != address(0)) revert InvalidStatus();
+
+        saleToken = saleToken_;
+        tokenUnitScale = _detectTokenUnitScale(saleToken_);
+
+        emit SaleTokenConfigured(saleToken_, tokenUnitScale);
+    }
+
+    function setFourMemeTokenManager(address manager) external onlyOwner {
+        if (manager == address(0)) revert InvalidAddress();
+        fourMemeTokenManager = manager;
+        emit FourMemeTokenManagerUpdated(manager);
     }
 
     function pause() external onlyOwner {
@@ -667,6 +705,44 @@ contract MultiEpochAuctionApplicationMVP {
         emit TreasuryWithdrawn(to, amountWei);
     }
 
+    function launchFourMemeToken(uint256 applicationId, bytes calldata createArgs, bytes calldata signature)
+        external
+        payable
+        onlyOwner
+        nonReentrant
+    {
+        AuctionApplication storage app = _application(applicationId);
+        if (app.status != ApplicationStatus.Closed) revert InvalidStatus();
+        if (fourMemeLaunchExecuted[applicationId]) revert FourMemeLaunchAlreadyExecuted();
+        if (!_allEpochsFinalized(applicationId, app.totalEpochs)) revert EpochNotFinalized();
+        if (createArgs.length == 0 || signature.length == 0) revert InvalidConfig();
+
+        address manager = fourMemeTokenManager;
+        if (manager == address(0)) revert FourMemeNotConfigured();
+
+        IFourMemeTokenManager2 tokenManager = IFourMemeTokenManager2(manager);
+        uint256 beforeCount = tokenManager._tokenCount();
+
+        tokenManager.createToken{value: msg.value}(createArgs, signature);
+
+        uint256 afterCount = tokenManager._tokenCount();
+        if (afterCount <= beforeCount) revert InvalidConfig();
+
+        address launchedToken = tokenManager._tokens(afterCount - 1);
+        if (launchedToken == address(0)) revert InvalidConfig();
+
+        launchedTokenByApplication[applicationId] = launchedToken;
+        fourMemeLaunchExecuted[applicationId] = true;
+
+        if (saleToken == address(0)) {
+            saleToken = launchedToken;
+            tokenUnitScale = _detectTokenUnitScale(launchedToken);
+            emit SaleTokenConfigured(launchedToken, tokenUnitScale);
+        }
+
+        emit FourMemeTokenLaunched(applicationId, launchedToken, msg.value);
+    }
+
     function rescueExcessETH(address payable to, uint256 amountWei) external onlyOwner nonReentrant {
         if (to == address(0)) revert InvalidAddress();
 
@@ -772,6 +848,7 @@ contract MultiEpochAuctionApplicationMVP {
     function _claimTokens(uint256 applicationId, uint256[] calldata epochIds) internal {
         AuctionApplication storage app = _application(applicationId);
         if (!_isSettlementStatus(app.status)) revert InvalidStatus();
+        _requireSaleTokenConfigured();
 
         uint256 wholeTokens;
         for (uint256 i = 0; i < epochIds.length; i++) {
@@ -790,7 +867,7 @@ contract MultiEpochAuctionApplicationMVP {
         if (wholeTokens == 0) revert NothingToClaim();
 
         uint256 tokenUnits = wholeTokens * tokenUnitScale;
-        if (!saleToken.transfer(msg.sender, tokenUnits)) revert TransferFailed();
+        if (!IERC20Like(saleToken).transfer(msg.sender, tokenUnits)) revert TransferFailed();
 
         emit TokensClaimed(msg.sender, applicationId, tokenUnits);
     }
@@ -818,6 +895,7 @@ contract MultiEpochAuctionApplicationMVP {
 
     function _recoverUnsoldTokens(uint256 applicationId, address to, uint256 tokenUnits) internal {
         if (to == address(0)) revert InvalidAddress();
+        _requireSaleTokenConfigured();
         if (tokenUnits == 0 || tokenUnits % tokenUnitScale != 0) revert InvalidConfig();
 
         AuctionApplication storage app = _application(applicationId);
@@ -831,8 +909,12 @@ contract MultiEpochAuctionApplicationMVP {
 
         recoveredUnsoldWholeTokens[applicationId] = recovered + requestedWhole;
 
-        if (!saleToken.transfer(to, tokenUnits)) revert TransferFailed();
+        if (!IERC20Like(saleToken).transfer(to, tokenUnits)) revert TransferFailed();
         emit UnsoldTokensRecovered(applicationId, to, tokenUnits);
+    }
+
+    function _requireSaleTokenConfigured() internal view {
+        if (saleToken == address(0)) revert SaleTokenNotConfigured();
     }
 
     function _remaining(uint256 appId, uint256 epochId) internal view returns (uint256) {

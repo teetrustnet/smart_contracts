@@ -92,13 +92,18 @@ async function main() {
   const startDelaySeconds = readNumber("MVP_START_DELAY_SECONDS", 120);
   const startTime = readNumber("MVP_START_TIME", now + startDelaySeconds);
 
-  const tokenAddress = readAddress("MVP_SALE_TOKEN_ADDRESS", deployer.address);
-  const token = new ethers.Contract(tokenAddress, ERC20_ABI, deployer);
+  const tokenAddress = readAddress("MVP_SALE_TOKEN_ADDRESS", ethers.ZeroAddress);
+  const fourMemeTokenManager = readAddress("MVP_FOUR_MEME_TOKEN_MANAGER", ethers.ZeroAddress);
+  const token = tokenAddress === ethers.ZeroAddress ? null : new ethers.Contract(tokenAddress, ERC20_ABI, deployer);
   const seedAuctionWithTokens = readBoolean("MVP_SEED_AUCTION_WITH_TOKENS", false);
 
   const Auction = await ethers.getContractFactory("MultiEpochAuctionApplicationMVP");
   const auction = await Auction.deploy(tokenAddress, treasuryAddress);
   await auction.waitForDeployment();
+
+  if (fourMemeTokenManager !== ethers.ZeroAddress) {
+    await (await auction.setFourMemeTokenManager(fourMemeTokenManager)).wait();
+  }
 
   const appId = await auction
     .createAuctionApplication.staticCall(
@@ -138,6 +143,10 @@ async function main() {
   await (await auction.launchAuctionApplication(appId, startTime)).wait();
 
   if (seedAuctionWithTokens) {
+    if (!token) {
+      throw new Error("MVP_SALE_TOKEN_ADDRESS is required when MVP_SEED_AUCTION_WITH_TOKENS=true");
+    }
+
     const transferAmount = totalAuctionSupplyTokens * 10n ** 18n;
     const deployerBalance = await token.balanceOf(deployer.address);
     if (deployerBalance < transferAmount) {
@@ -150,6 +159,7 @@ async function main() {
   }
 
   console.log("SaleToken:", tokenAddress);
+  console.log("FourMemeTokenManager:", fourMemeTokenManager);
   console.log("MultiEpochAuctionApplicationMVP:", await auction.getAddress());
   console.log("Treasury:", treasuryAddress);
   console.log("ApplicationId:", appId.toString());

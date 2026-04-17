@@ -195,6 +195,43 @@ describe("MultiEpochAuctionApplicationMVP", function () {
     ).to.not.be.reverted;
   });
 
+  it("launches four.meme token after auction completion and records launched token", async function () {
+    const { owner, bidderA, auction } = await deployFixture();
+
+    const MockManager = await ethers.getContractFactory("MockFourMemeTokenManager2");
+    const mockManager = await MockManager.deploy();
+    await mockManager.waitForDeployment();
+
+    await (await auction.connect(owner).setFourMemeTokenManager(await mockManager.getAddress())).wait();
+
+    const appId = await createConfiguredApplication(auction, owner, bidderA, {
+      totalEpochs: 2,
+      epochDuration: 180,
+      commitDuration: 120,
+      revealDuration: 60,
+      maxQuantityPerBid: 10_000,
+    });
+
+    const latest = await ethers.provider.getBlock("latest");
+    const startTime = latest.timestamp + 20;
+    await (await auction.connect(owner).launchAuctionApplication(appId, startTime)).wait();
+
+    await time.increaseTo(startTime + 400);
+    await (await auction.connect(owner).closeAuctionApplication(appId)).wait();
+
+    await (await auction.finalizeEpoch(appId, 1, 50)).wait();
+    await (await auction.finalizeEpoch(appId, 2, 50)).wait();
+
+    const createArgs = ethers.hexlify(ethers.toUtf8Bytes("mock-args"));
+    const signature = ethers.hexlify(ethers.toUtf8Bytes("mock-signature"));
+
+    await (await auction.connect(owner).launchFourMemeToken(appId, createArgs, signature)).wait();
+
+    const launched = await auction.launchedTokenByApplication(appId);
+    expect(launched).to.not.equal(ethers.ZeroAddress);
+    expect(await auction.fourMemeLaunchExecuted(appId)).to.equal(true);
+  });
+
   it("keeps legacy commitBid(epochId, commitment) + revealBid compatibility", async function () {
     const { owner, bidderA, auction } = await deployFixture();
 

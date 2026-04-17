@@ -43,7 +43,34 @@ This MVP is designed to match current TrustNet-Web auction pages (`AuctionLandin
 
 - `quantity` is interpreted as **whole-token count** (aligned with frontend input).
 - Collateral/payment in wei: `quantity * pricePerTokenWei`.
-- Claims transfer ERC-20 token units as: `quantity * 1e18`.
+- Claims transfer ERC-20 token units as: `quantity * tokenUnitScale` (auto-detected from token decimals, fallback 1e18).
+
+## Four.meme integration (post-auction token generation)
+
+This contract now supports generating a token on four.meme **after auction completion**.
+
+### On-chain prerequisites
+
+1. Configure manager address:
+   - `setFourMemeTokenManager(address)`
+2. Auction must be:
+   - `status == Closed`
+   - all epochs finalized
+
+### Launch call
+
+Use:
+
+- `launchFourMemeToken(applicationId, createArgs, signature)` (payable)
+
+Where:
+- `createArgs` and `signature` come from four.meme `token/create` API response.
+- `msg.value` should include required launch fee (if any).
+
+### Result
+
+- `launchedTokenByApplication[applicationId]` stores created token address (derived from four.meme manager `_tokenCount/_tokens`).
+- If `saleToken` is not configured yet, it is auto-bound to the launched token.
 
 ## Deployment bootstrap
 

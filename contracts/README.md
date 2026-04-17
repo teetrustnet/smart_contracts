@@ -25,12 +25,15 @@
   - batched finalize: `finalizeEpoch(applicationId, epochId, maxParticipants)`
   - post-close settlement by appId: `claimTokens(applicationId, epochIds)` / `withdrawRefund(applicationId, epochId)`
   - strict treasury destination + excess ETH rescue guard
+- Four.meme launch integration:
+  - `setFourMemeTokenManager(address)`
+  - `launchFourMemeToken(applicationId, createArgs, signature)` (payable)
 
 ## Quantity / Value Semantics
 
 - Quantity is **whole-token count**.
 - Payment is quoted in wei: `quantity * pricePerTokenWei`.
-- Claim transfers `quantity * 1e18` token units.
+- Claim transfers `quantity * tokenUnitScale` token units (token decimals auto-detected, fallback 1e18).
 
 ## Notes
 
